@@ -36,7 +36,7 @@ function preQualify(formData) {
   const amount = parseFloat(formData.loanAmount) || 0
   const limits = {
     personal: { min: 10000, max: 30000 },
-    sme:      { min: 50000, max: 100000 },
+    sme:      { min: 50000, max: 300000 },
     akap:     { min: 5000,  max: 40000 }
   }
   const limit = limits[formData.loanType]
