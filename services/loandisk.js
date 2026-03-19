@@ -8,6 +8,17 @@ async function createBorrower(formData, finScore) {
     Authorization: `Basic ${process.env.LOANDISK_AUTH_CODE}`
   }
 
+  function formatDOB(dob) {
+    if (!dob) return ''
+    // Handle yyyy-mm-dd format
+    if (dob.includes('-')) {
+      const [year, month, day] = dob.split('-')
+      return `${month}/${day}/${year}`
+    }
+    // Already in mm/dd/yyyy format
+    return dob
+  }
+
   const workingStatusMap = {
     'Employed': 'Employee',
     'Government Employee': 'Government Employee',
@@ -27,7 +38,7 @@ async function createBorrower(formData, finScore) {
     borrower_lastname: formData.lastName,
     borrower_mobile: formData.mobile,
     borrower_email: formData.email,
-    borrower_dob: formData.dob,
+    borrower_dob: formatDOB(formData.dob),
     borrower_address: formData.address,
     borrower_city: formData.city,
     borrower_province: formData.province,
