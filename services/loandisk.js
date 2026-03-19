@@ -8,6 +8,15 @@ async function createBorrower(formData, finScore) {
     Authorization: `Basic ${process.env.LOANDISK_AUTH_CODE}`
   }
 
+  const workingStatusMap = {
+    'Employed': 'Employee',
+    'Self-Employed': 'Self Employed',
+    'Self Employed': 'Self Employed',
+    'Business Owner': 'Business Owner',
+    'OFW': 'OFW',
+    'Employee': 'Employee'
+  }
+
   const payload = {
     borrower_country: 'PH',
     borrower_firstname: formData.firstName,
@@ -19,12 +28,21 @@ async function createBorrower(formData, finScore) {
     borrower_city: formData.city,
     borrower_province: formData.province,
     borrower_zipcode: formData.zipcode,
-    borrower_working_status: formData.employmentStatus,
+    borrower_working_status: workingStatusMap[formData.employmentStatus] || 'Employee',
     borrower_credit_score: finScore.score,
-    custom_field_26904: formData.barangay
+        custom_field_26904: formData.barangay,
+    borrower_business_name: formData.businessName || '',
+    borrower_description: formData.refAName ? `
+PERSONAL REFERENCES:
+A. Name: ${formData.refAName} | Relationship: ${formData.refARelationship} | Contact: ${formData.refAContact}
+B. Name: ${formData.refBName} | Relationship: ${formData.refBRelationship} | Contact: ${formData.refBContact}
+C. Name: ${formData.refCName} | Relationship: ${formData.refCRelationship} | Contact: ${formData.refCContact}
+`.trim() : ''
   }
 
-  console.log('PAYLOAD:', JSON.stringify(payload))
+  console.log('=== LOANDISK PAYLOAD ===')
+  console.log(JSON.stringify(payload, null, 2))
+  console.log('========================')
 
   const response = await axios.post(
     `${BASE_URL}/borrower`,
