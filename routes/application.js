@@ -103,14 +103,10 @@ router.post('/submit', upload.any(), async (req, res) => {
       return res.status(200).json({ status: 'declined', reasons })
     }
 
-    // Step 2 — FinScore (mocked until credentials arrive)
-    // TODO: replace with real FinScore call once sandbox credentials received
-    // const finScore = await getScore(formData.mobile)
-    const finScore = {
-      score: 700,
-      riskBand: '21',
-      fraudFlag: 'false'
-    }
+    // Step 2 — FinScore
+    const { getScore } = require('../services/finscore')
+    const finScore = await getScore(formData.mobile)
+    console.log('FinScore result:', JSON.stringify(finScore))
 
     // Step 3 — Create borrower in Loandisk
     const borrowerId = await createBorrower(formData, finScore)
