@@ -10,10 +10,14 @@ async function createBorrower(formData, finScore) {
 
   const workingStatusMap = {
     'Employed': 'Employee',
-    'Self-Employed': 'Self Employed',
-    'Self Employed': 'Self Employed',
-    'Business Owner': 'Business Owner',
-    'OFW': 'OFW',
+    'Government Employee': 'Government Employee',
+    'Private Sector Employee': 'Private Sector Employee',
+    'Self-Employed': 'Owner',
+    'Business Owner': 'Owner',
+    'OFW': 'Overseas Worker',
+    'Student': 'Student',
+    'Pensioner': 'Pensioner',
+    'Unemployed': 'Unemployed',
     'Employee': 'Employee'
   }
 
