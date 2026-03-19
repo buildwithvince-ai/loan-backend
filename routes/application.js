@@ -136,4 +136,19 @@ router.post('/submit', upload.any(), async (req, res) => {
   }
 })
 
+router.post('/test-finscore', async (req, res) => {
+  try {
+    const { getScore } = require('../services/finscore')
+    const { mobile } = req.body
+    if (!mobile) {
+      return res.status(400).json({ status: 'error', message: 'mobile is required' })
+    }
+    const result = await getScore(mobile)
+    return res.status(200).json({ status: 'success', result })
+  } catch (error) {
+    console.error('FinScore test error:', error.message)
+    return res.status(500).json({ status: 'error', message: error.message })
+  }
+})
+
 module.exports = router
