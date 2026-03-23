@@ -13,7 +13,7 @@ async function getAccessToken() {
   ).toString('base64')
 
   const response = await axios.post(
-    `${process.env.FINSCORE_BASE_URL}/auth/connect/token`,
+    process.env.FINSCORE_AUTH_URL,
     'grant_type=client_credentials',
     {
       headers: {
@@ -68,7 +68,7 @@ async function getScore(mobileNumber) {
     console.log(`FinScore request — mobile: ${converted}, product: ${productId}`)
 
     const response = await axios.post(
-      `${process.env.FINSCORE_BASE_URL}/score/api/v2/score`,
+      process.env.FINSCORE_SCORE_URL,
       {
         mobilenumber: converted,
         productids: productId,
