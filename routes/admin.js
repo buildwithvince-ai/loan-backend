@@ -29,7 +29,7 @@ router.get('/applications', async (req, res) => {
   }
 })
 
-// Get single application
+// Get single application by ID
 router.get('/applications/:id', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -46,6 +46,23 @@ router.get('/applications/:id', async (req, res) => {
   }
 })
 
+// Get application by phone number
+router.get('/applications/phone/:phone', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('applications')
+      .select('*')
+      .eq('phone', req.params.phone)
+      .order('submitted_at', { ascending: false })
+
+    if (error) throw error
+    return res.json(data)
+  } catch (error) {
+    console.error('Admin phone lookup error:', error.message)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 // Submit CI score and calculate final score + tier
 router.patch('/applications/:id/ci-score', async (req, res) => {
   try {
@@ -55,7 +72,6 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
       ci_remarks, ci_recommended_amount
     } = req.body
 
-    // Get current application for finscore_normalized
     const { data: app, error: fetchError } = await supabase
       .from('applications')
       .select('finscore_normalized')
@@ -65,7 +81,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
     if (fetchError) throw fetchError
 
     // Normalize CI from 0-50 scale to 0-100
-    const ci_normalized = (ci_score / 50) * 100
+    const ci_normalized = Math.round((ci_score / 50) * 100)
     const final_score = Math.round(
       ((app.finscore_normalized * 0.50) + (ci_normalized * 0.50)) * 10
     ) / 10
@@ -79,6 +95,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
       .from('applications')
       .update({
         ci_score,
+        ci_normalized,
         final_score,
         tier,
         notes,
@@ -115,8 +132,11 @@ router.patch('/applications/:id/approve', async (req, res) => {
 
     if (fetchError) throw fetchError
 
-    if (app.tier === 'declined') {
-      return res.status(400).json({ error: 'Cannot approve a declined-tier application' })
+    if (app.ci_score === null || app.ci_score === undefined) {
+      return res.status(400).json({ error: 'CI form must be completed before approval' })
+    }
+    if (!app.tier) {
+      return res.status(400).json({ error: 'Tier must be calculated before approval' })
     }
 
     const formData = app.form_data
@@ -155,6 +175,18 @@ router.patch('/applications/:id/approve', async (req, res) => {
 router.patch('/applications/:id/decline', async (req, res) => {
   try {
     const { reviewed_by, notes } = req.body
+
+    const { data: app, error: fetchError } = await supabase
+      .from('applications')
+      .select('ci_score')
+      .eq('id', req.params.id)
+      .single()
+
+    if (fetchError) throw fetchError
+
+    if (app.ci_score === null || app.ci_score === undefined) {
+      return res.status(400).json({ error: 'CI form must be completed before declining' })
+    }
 
     const { data, error } = await supabase
       .from('applications')

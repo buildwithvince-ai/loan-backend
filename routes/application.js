@@ -96,24 +96,47 @@ router.post('/test-upload', upload.single('file'), async (req, res) => {
 router.post('/submit', upload.any(), async (req, res) => {
   try {
     const formData = req.body
+    const files = req.files || []
 
-    // Step 1 — Pre-qualification
+    // Step 1 — Check for existing pending application with same phone
+    const { data: existing } = await supabase
+      .from('applications')
+      .select('id')
+      .eq('phone', formData.mobile)
+      .eq('status', 'pending')
+      .maybeSingle()
+
+    if (existing) {
+      return res.status(200).json({
+        status: 'error',
+        message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
+      })
+    }
+
+    // Step 2 — Pre-qualification
     const reasons = preQualify(formData)
     if (reasons.length > 0) {
       return res.status(200).json({ status: 'declined', reasons })
     }
 
-    // Step 2 — FinScore
+    // Step 3 — FinScore
     const { getScore } = require('../services/finscore')
     const finScore = await getScore(formData.mobile)
     console.log('FinScore result:', JSON.stringify(finScore))
 
-    // Step 3 — Normalize FinScore
+    // Step 4 — Normalize FinScore
     const finscore_raw = finScore.score || 0
     const finscore_normalized = finscore_raw === 0 ? 0 :
       Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
 
-    // Step 4 — Save to Supabase
+    // Step 5 — Build file metadata (no upload yet, needs borrower ID)
+    const file_metadata = files.map(f => ({
+      field_name: f.fieldname,
+      original_name: f.originalname,
+      size: f.size
+    }))
+
+    // Step 6 — Save to Supabase
     const reference_id = 'GR8-' + Date.now()
 
     const { error } = await supabase
@@ -130,7 +153,7 @@ router.post('/submit', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
-        file_ids: []
+        file_metadata
       })
 
     if (error) throw error
@@ -155,6 +178,22 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     const { loanType, totalLoanAmount, loanTerm, groupName } = req.body
     const members = JSON.parse(req.body.members)
     const files = req.files || []
+
+    // Check for existing pending application with leader's phone
+    const leader = members[0]
+    const { data: existing } = await supabase
+      .from('applications')
+      .select('id')
+      .eq('phone', leader.mobile)
+      .eq('status', 'pending')
+      .maybeSingle()
+
+    if (existing) {
+      return res.status(200).json({
+        status: 'error',
+        message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
+      })
+    }
 
     // Validate member count
     if (loanType === 'group' && members.length < 5) {
@@ -203,7 +242,6 @@ router.post('/submit-group', upload.any(), async (req, res) => {
 
     // FinScore for leader (first member)
     const { getScore } = require('../services/finscore')
-    const leader = members[0]
     let finScore = { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
     try {
       finScore = await getScore(leader.mobile)
@@ -217,6 +255,12 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
 
     const reference_id = 'GR8-' + Date.now()
+
+    const file_metadata = files.map(f => ({
+      field_name: f.fieldname,
+      original_name: f.originalname,
+      size: f.size
+    }))
 
     const { error } = await supabase
       .from('applications')
@@ -232,7 +276,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
-        file_ids: [],
+        file_metadata,
         group_members: members
       })
 
