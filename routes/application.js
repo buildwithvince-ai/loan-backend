@@ -3,6 +3,7 @@ const multer = require('multer')
 const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage() })
 const { createBorrower, uploadAllFiles } = require('../services/loandisk')
+const { supabase } = require('../services/supabase')
 
 // Pre-qualification check
 function preQualify(formData) {
@@ -91,11 +92,10 @@ router.post('/test-upload', upload.single('file'), async (req, res) => {
   }
 })
 
-// Main submit route
+// Main submit route — saves to Supabase, no Loandisk until admin approval
 router.post('/submit', upload.any(), async (req, res) => {
   try {
     const formData = req.body
-    const files = req.files || []
 
     // Step 1 — Pre-qualification
     const reasons = preQualify(formData)
@@ -108,19 +108,36 @@ router.post('/submit', upload.any(), async (req, res) => {
     const finScore = await getScore(formData.mobile)
     console.log('FinScore result:', JSON.stringify(finScore))
 
-    // Step 3 — Create borrower in Loandisk
-    const borrowerId = await createBorrower(formData, finScore)
+    // Step 3 — Normalize FinScore
+    const finscore_raw = finScore.score || 0
+    const finscore_normalized = finscore_raw === 0 ? 0 :
+      Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
 
-    // Step 4 — Upload files to S3
-    let fileIds = []
-    if (files.length > 0) {
-      fileIds = await uploadAllFiles(borrowerId, files)
-    }
+    // Step 4 — Save to Supabase
+    const reference_id = 'GR8-' + Date.now()
 
-    // Step 5 — Return success
+    const { error } = await supabase
+      .from('applications')
+      .insert({
+        reference_id,
+        phone: formData.mobile,
+        loan_type: formData.loanType,
+        full_name: formData.firstName + ' ' + formData.lastName,
+        email: formData.email,
+        loan_amount: formData.loanAmount,
+        loan_term: formData.loanTerm,
+        form_data: formData,
+        finscore_raw,
+        finscore_normalized,
+        status: 'pending',
+        file_ids: []
+      })
+
+    if (error) throw error
+
     return res.status(200).json({
       status: 'success',
-      referenceId: borrowerId
+      referenceId: reference_id
     })
 
   } catch (error) {
@@ -184,72 +201,47 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       return res.status(200).json({ status: 'declined', reasons: memberErrors })
     }
 
-    // Split loan equally
-    const perMemberAmount = amount / members.length
+    // FinScore for leader (first member)
     const { getScore } = require('../services/finscore')
-    const borrowerIds = []
-    const results = []
-
-    // Process each member sequentially
-    for (let index = 0; index < members.length; index++) {
-      const member = members[index]
-
-      // FinScore
-      let finScore = { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
-      try {
-        finScore = await getScore(member.mobile)
-        console.log(`[Group] Member ${index} FinScore:`, JSON.stringify(finScore))
-      } catch (err) {
-        console.error(`[Group] Member ${index} FinScore failed:`, err.message)
-      }
-
-      // Build form data
-      const memberFormData = {
-        firstName: member.firstName,
-        lastName: member.lastName,
-        mobile: member.mobile,
-        email: member.email || '',
-        dob: member.dob,
-        address: member.address,
-        barangay: member.barangay,
-        city: member.city,
-        province: member.province,
-        zipcode: member.zipcode,
-        employmentStatus: member.employmentStatus,
-        monthlyIncome: member.monthlyIncome,
-        businessName: groupName,
-        loanAmount: perMemberAmount,
-        loanType: loanType
-      }
-
-      // Create borrower
-      let borrowerId
-      try {
-        borrowerId = await createBorrower(memberFormData, finScore)
-        console.log(`[Group] Member ${index} borrower created:`, borrowerId)
-      } catch (err) {
-        console.error(`[Group] Member ${index} Loandisk creation failed:`, err.message)
-        return res.status(500).json({
-          status: 'error',
-          message: `Failed at member ${index + 1}. Please try again.`
-        })
-      }
-
-      // Upload member files
-      const memberFiles = files.filter(f => f.fieldname.startsWith(`member_${index}_`))
-      if (memberFiles.length > 0) {
-        await uploadAllFiles(borrowerId, memberFiles)
-      }
-
-      borrowerIds.push(borrowerId)
-      results.push({ memberId: index, borrowerId, score: finScore.score })
+    const leader = members[0]
+    let finScore = { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
+    try {
+      finScore = await getScore(leader.mobile)
+      console.log('[Group] Leader FinScore:', JSON.stringify(finScore))
+    } catch (err) {
+      console.error('[Group] Leader FinScore failed:', err.message)
     }
+
+    const finscore_raw = finScore.score || 0
+    const finscore_normalized = finscore_raw === 0 ? 0 :
+      Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
+
+    const reference_id = 'GR8-' + Date.now()
+
+    const { error } = await supabase
+      .from('applications')
+      .insert({
+        reference_id,
+        phone: leader.mobile,
+        loan_type: loanType,
+        full_name: leader.firstName + ' ' + leader.lastName,
+        email: leader.email || '',
+        loan_amount: totalLoanAmount,
+        loan_term: loanTerm,
+        form_data: { loanType, totalLoanAmount, loanTerm, groupName },
+        finscore_raw,
+        finscore_normalized,
+        status: 'pending',
+        file_ids: [],
+        group_members: members
+      })
+
+    if (error) throw error
 
     return res.status(200).json({
       status: 'success',
-      referenceId: borrowerIds[0],
-      totalMembers: members.length,
-      borrowerIds
+      referenceId: reference_id,
+      totalMembers: members.length
     })
 
   } catch (error) {

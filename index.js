@@ -15,6 +15,9 @@ app.get('/', (req, res) => {
 const applicationRouter = require('./routes/application')
 app.use('/api/application', applicationRouter)
 
+const adminRouter = require('./routes/admin')
+app.use('/api/admin', adminRouter)
+
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
