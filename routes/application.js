@@ -129,15 +129,33 @@ router.post('/submit', upload.any(), async (req, res) => {
     const finscore_normalized = finscore_raw === 0 ? 0 :
       Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
 
-    // Step 5 — Build file metadata (no upload yet, needs borrower ID)
-    const file_metadata = files.map(f => ({
-      field_name: f.fieldname,
-      original_name: f.originalname,
-      size: f.size
-    }))
+    // Step 5 — Upload files to Supabase Storage
+    const reference_id = 'GR8-' + Date.now()
+    const file_metadata = []
+
+    for (const file of files) {
+      const storagePath = `${reference_id}/${file.originalname}`
+      const { error: uploadError } = await supabase.storage
+        .from('application-files')
+        .upload(storagePath, file.buffer, {
+          contentType: file.mimetype,
+          upsert: false
+        })
+
+      if (uploadError) {
+        console.error('File upload error:', uploadError.message)
+        continue
+      }
+
+      file_metadata.push({
+        field_name: file.fieldname,
+        original_name: file.originalname,
+        size: file.size,
+        storage_path: storagePath
+      })
+    }
 
     // Step 6 — Save to Supabase
-    const reference_id = 'GR8-' + Date.now()
 
     const { error } = await supabase
       .from('applications')
@@ -256,11 +274,28 @@ router.post('/submit-group', upload.any(), async (req, res) => {
 
     const reference_id = 'GR8-' + Date.now()
 
-    const file_metadata = files.map(f => ({
-      field_name: f.fieldname,
-      original_name: f.originalname,
-      size: f.size
-    }))
+    const file_metadata = []
+    for (const file of files) {
+      const storagePath = `${reference_id}/${file.originalname}`
+      const { error: uploadError } = await supabase.storage
+        .from('application-files')
+        .upload(storagePath, file.buffer, {
+          contentType: file.mimetype,
+          upsert: false
+        })
+
+      if (uploadError) {
+        console.error('File upload error:', uploadError.message)
+        continue
+      }
+
+      file_metadata.push({
+        field_name: file.fieldname,
+        original_name: file.originalname,
+        size: file.size,
+        storage_path: storagePath
+      })
+    }
 
     const { error } = await supabase
       .from('applications')

@@ -151,6 +151,34 @@ router.patch('/applications/:id/approve', async (req, res) => {
 
     const borrowerId = await createBorrower(formData, finScore)
 
+    // Pull files from Supabase Storage and upload to Loandisk
+    const fileMetadata = app.file_metadata || []
+    if (fileMetadata.length > 0) {
+      const filesToUpload = []
+
+      for (const fileMeta of fileMetadata) {
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from('application-files')
+          .download(fileMeta.storage_path)
+
+        if (downloadError) {
+          console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message)
+          continue
+        }
+
+        const buffer = Buffer.from(await fileData.arrayBuffer())
+        filesToUpload.push({
+          originalname: fileMeta.original_name,
+          buffer
+        })
+      }
+
+      if (filesToUpload.length > 0) {
+        await uploadAllFiles(borrowerId, filesToUpload)
+        console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`)
+      }
+    }
+
     const { data, error } = await supabase
       .from('applications')
       .update({
