@@ -49,7 +49,11 @@ router.get('/applications/:id', async (req, res) => {
 // Submit CI score and calculate final score + tier
 router.patch('/applications/:id/ci-score', async (req, res) => {
   try {
-    const { ci_score, notes, reviewed_by } = req.body
+    const {
+      ci_score, notes, reviewed_by,
+      ci_form_data, interviewer, ci_recommendation,
+      ci_remarks, ci_recommended_amount
+    } = req.body
 
     // Get current application for finscore_normalized
     const { data: app, error: fetchError } = await supabase
@@ -60,9 +64,11 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
 
     if (fetchError) throw fetchError
 
+    // Normalize CI from 0-50 scale to 0-100
+    const ci_normalized = (ci_score / 50) * 100
     const final_score = Math.round(
-      (app.finscore_normalized * 0.50) + (ci_score * 0.50)
-    )
+      ((app.finscore_normalized * 0.50) + (ci_normalized * 0.50)) * 10
+    ) / 10
 
     let tier
     if (final_score >= 85) tier = 'approved'
@@ -77,6 +83,11 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
         tier,
         notes,
         reviewed_by,
+        ci_form_data,
+        interviewer,
+        ci_recommendation,
+        ci_remarks,
+        ci_recommended_amount,
         reviewed_at: new Date().toISOString()
       })
       .eq('id', req.params.id)
