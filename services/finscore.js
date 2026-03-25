@@ -55,7 +55,7 @@ function detectProductId(mobile) {
 
   if (ditoPrefixes.some(p => prefix.startsWith(p.slice(0,3)))) return 'DT1;'
   if (globePrefixes.some(p => prefix === p)) return 'GL1;'
-  return 'G;' // default to SMART
+  return 'Q1;' // default to SMART
 }
 
 async function getScore(mobileNumber) {
