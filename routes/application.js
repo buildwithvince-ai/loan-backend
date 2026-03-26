@@ -131,10 +131,11 @@ router.post('/submit', upload.any(), async (req, res) => {
 
     // Step 5 — Upload files to Supabase Storage
     const reference_id = 'GR8-' + Date.now()
+    const folderName = `${reference_id}_${formData.firstName}-${formData.lastName}`
     const file_metadata = []
 
     for (const file of files) {
-      const storagePath = `${reference_id}/${file.originalname}`
+      const storagePath = `${folderName}/${file.originalname}`
       const { error: uploadError } = await supabase.storage
         .from('application-files')
         .upload(storagePath, file.buffer, {
@@ -155,7 +156,11 @@ router.post('/submit', upload.any(), async (req, res) => {
       })
     }
 
-    // Step 6 — Save to Supabase
+    // Step 6 — Extract consent
+    const consent_agreed = formData.consentAgreed === 'true' || formData.consentAgreed === true
+    const consent_agreed_at = new Date().toISOString()
+
+    // Step 7 — Save to Supabase
 
     const { error } = await supabase
       .from('applications')
@@ -171,7 +176,9 @@ router.post('/submit', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
-        file_metadata
+        file_metadata,
+        consent_agreed,
+        consent_agreed_at
       })
 
     if (error) throw error
@@ -273,10 +280,11 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
 
     const reference_id = 'GR8-' + Date.now()
+    const folderName = `${reference_id}_${leader.firstName}-${leader.lastName}`
 
     const file_metadata = []
     for (const file of files) {
-      const storagePath = `${reference_id}/${file.originalname}`
+      const storagePath = `${folderName}/${file.originalname}`
       const { error: uploadError } = await supabase.storage
         .from('application-files')
         .upload(storagePath, file.buffer, {
@@ -297,6 +305,9 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       })
     }
 
+    const consent_agreed = req.body.consentAgreed === 'true' || req.body.consentAgreed === true
+    const consent_agreed_at = new Date().toISOString()
+
     const { error } = await supabase
       .from('applications')
       .insert({
@@ -312,7 +323,9 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         finscore_normalized,
         status: 'pending',
         file_metadata,
-        group_members: members
+        group_members: members,
+        consent_agreed,
+        consent_agreed_at
       })
 
     if (error) throw error

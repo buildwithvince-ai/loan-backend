@@ -199,6 +199,56 @@ router.patch('/applications/:id/approve', async (req, res) => {
   }
 })
 
+// Export consent report as CSV
+router.get('/export/consent', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('applications')
+      .select('reference_id, full_name, phone, loan_type, consent_agreed, consent_agreed_at, submitted_at')
+      .eq('consent_agreed', true)
+      .order('submitted_at', { ascending: false })
+
+    if (error) throw error
+
+    const formatPH = (iso) => {
+      if (!iso) return ''
+      return new Date(iso).toLocaleString('en-PH', {
+        timeZone: 'Asia/Manila',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+      }).replace(/(\d+)\/(\d+)\/(\d+),?\s*/, '$3-$1-$2 ')
+    }
+
+    const escape = (val) => {
+      const str = String(val ?? '')
+      return str.includes(',') || str.includes('"') || str.includes('\n')
+        ? '"' + str.replace(/"/g, '""') + '"'
+        : str
+    }
+
+    const header = 'Reference ID,Full Name,Phone Number,Loan Type,Consent Agreed,Consent Date,Submitted At'
+    const rows = data.map(r => [
+      r.reference_id,
+      escape(r.full_name),
+      r.phone,
+      r.loan_type,
+      r.consent_agreed ? 'Yes' : 'No',
+      formatPH(r.consent_agreed_at),
+      formatPH(r.submitted_at)
+    ].join(','))
+
+    const csv = [header, ...rows].join('\n')
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', 'attachment; filename="consent_report.csv"')
+    return res.send(csv)
+  } catch (error) {
+    console.error('Consent export error:', error.message)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 // Decline application
 router.patch('/applications/:id/decline', async (req, res) => {
   try {
