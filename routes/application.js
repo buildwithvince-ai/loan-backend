@@ -4,6 +4,7 @@ const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage() })
 const { createBorrower, uploadAllFiles } = require('../services/loandisk')
 const { supabase } = require('../services/supabase')
+const { compressFiles } = require('../services/compress')
 
 // Pre-qualification check
 function preQualify(formData) {
@@ -129,12 +130,13 @@ router.post('/submit', upload.any(), async (req, res) => {
     const finscore_normalized = finscore_raw === 0 ? 0 :
       Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
 
-    // Step 5 — Upload files to Supabase Storage
+    // Step 5 — Compress and upload files to Supabase Storage
     const reference_id = 'GR8-' + Date.now()
     const folderName = `${reference_id}_${formData.firstName}-${formData.lastName}`
     const file_metadata = []
+    const compressedFiles = await compressFiles(files)
 
-    for (const file of files) {
+    for (const file of compressedFiles) {
       const storagePath = `${folderName}/${file.originalname}`
       const { error: uploadError } = await supabase.storage
         .from('application-files')
@@ -151,6 +153,7 @@ router.post('/submit', upload.any(), async (req, res) => {
       file_metadata.push({
         field_name: file.fieldname,
         original_name: file.originalname,
+        original_size: file.originalSize || file.size,
         size: file.size,
         storage_path: storagePath
       })
@@ -283,7 +286,9 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     const folderName = `${reference_id}_${leader.firstName}-${leader.lastName}`
 
     const file_metadata = []
-    for (const file of files) {
+    const compressedFiles = await compressFiles(files)
+
+    for (const file of compressedFiles) {
       const storagePath = `${folderName}/${file.originalname}`
       const { error: uploadError } = await supabase.storage
         .from('application-files')
@@ -300,6 +305,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       file_metadata.push({
         field_name: file.fieldname,
         original_name: file.originalname,
+        original_size: file.originalSize || file.size,
         size: file.size,
         storage_path: storagePath
       })
