@@ -137,7 +137,7 @@ router.post('/submit', upload.any(), async (req, res) => {
     const compressedFiles = await compressFiles(files)
 
     for (const file of compressedFiles) {
-      const storagePath = `${folderName}/${file.originalname}`
+      const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
       const { error: uploadError } = await supabase.storage
         .from('application-files')
         .upload(storagePath, file.buffer, {
@@ -289,7 +289,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     const compressedFiles = await compressFiles(files)
 
     for (const file of compressedFiles) {
-      const storagePath = `${folderName}/${file.originalname}`
+      const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
       const { error: uploadError } = await supabase.storage
         .from('application-files')
         .upload(storagePath, file.buffer, {
