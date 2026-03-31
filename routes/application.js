@@ -114,6 +114,23 @@ router.post('/submit', upload.any(), async (req, res) => {
       })
     }
 
+    // Step 1b — Prior decline detection
+    let prior_decline_flag = false
+    let prior_decline_reference = null
+    const { data: priorDeclined } = await supabase
+      .from('applications')
+      .select('reference_id')
+      .eq('phone', formData.mobile)
+      .eq('status', 'declined')
+      .order('submitted_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (priorDeclined) {
+      prior_decline_flag = true
+      prior_decline_reference = priorDeclined.reference_id
+    }
+
     // Step 2 — Pre-qualification
     const reasons = preQualify(formData)
     if (reasons.length > 0) {
@@ -179,9 +196,12 @@ router.post('/submit', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
+        stage: 'sales_officer',
         file_metadata,
         consent_agreed,
-        consent_agreed_at
+        consent_agreed_at,
+        prior_decline_flag,
+        prior_decline_reference
       })
 
     if (error) throw error
@@ -221,6 +241,23 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         status: 'error',
         message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
       })
+    }
+
+    // Prior decline detection for group leader
+    let prior_decline_flag = false
+    let prior_decline_reference = null
+    const { data: priorDeclinedGroup } = await supabase
+      .from('applications')
+      .select('reference_id')
+      .eq('phone', leader.mobile)
+      .eq('status', 'declined')
+      .order('submitted_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (priorDeclinedGroup) {
+      prior_decline_flag = true
+      prior_decline_reference = priorDeclinedGroup.reference_id
     }
 
     // Validate member count
@@ -328,10 +365,13 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
+        stage: 'sales_officer',
         file_metadata,
         group_members: members,
         consent_agreed,
-        consent_agreed_at
+        consent_agreed_at,
+        prior_decline_flag,
+        prior_decline_reference
       })
 
     if (error) throw error

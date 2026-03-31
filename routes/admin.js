@@ -1,17 +1,9 @@
 const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
-const { createBorrower, uploadAllFiles } = require('../services/loandisk')
+const { verifyToken, requireRole } = require('../middleware/auth')
 
-const adminAuth = (req, res, next) => {
-  const secret = req.headers['x-admin-secret']
-  if (secret !== process.env.ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-  next()
-}
-
-router.use(adminAuth)
+router.use(verifyToken, requireRole('admin', 'super_admin'))
 
 // List all applications
 router.get('/applications', async (req, res) => {
@@ -119,83 +111,16 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
   }
 })
 
-// Approve application — push to Loandisk
+// Approve application — DEPRECATED: use PATCH /api/pipeline/:id/transition { to_stage: 'loan_processing_officer' }
+// Kept as a convenience wrapper that delegates to the pipeline transition.
 router.patch('/applications/:id/approve', async (req, res) => {
   try {
-    const { reviewed_by, adjusted_amount, adjusted_term } = req.body
-
-    const { data: app, error: fetchError } = await supabase
-      .from('applications')
-      .select('*')
-      .eq('id', req.params.id)
-      .single()
-
-    if (fetchError) throw fetchError
-
-    if (app.ci_score === null || app.ci_score === undefined) {
-      return res.status(400).json({ error: 'CI form must be completed before approval' })
-    }
-    if (!app.tier) {
-      return res.status(400).json({ error: 'Tier must be calculated before approval' })
-    }
-
-    const formData = app.form_data
-    if (adjusted_amount) formData.loanAmount = adjusted_amount
-    if (adjusted_term) formData.loanTerm = adjusted_term
-
-    const finScore = {
-      score: app.finscore_raw,
-      riskBand: 'N/A',
-      fraudFlag: 'false'
-    }
-
-    const borrowerId = await createBorrower(formData, finScore)
-
-    // Pull files from Supabase Storage and upload to Loandisk
-    const fileMetadata = app.file_metadata || []
-    if (fileMetadata.length > 0) {
-      const filesToUpload = []
-
-      for (const fileMeta of fileMetadata) {
-        const { data: fileData, error: downloadError } = await supabase.storage
-          .from('application-files')
-          .download(fileMeta.storage_path)
-
-        if (downloadError) {
-          console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message)
-          continue
-        }
-
-        const buffer = Buffer.from(await fileData.arrayBuffer())
-        filesToUpload.push({
-          originalname: fileMeta.original_name,
-          buffer
-        })
-      }
-
-      if (filesToUpload.length > 0) {
-        await uploadAllFiles(borrowerId, filesToUpload)
-        console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`)
-      }
-    }
-
-    const { data, error } = await supabase
-      .from('applications')
-      .update({
-        status: 'approved',
-        loandisk_borrower_id: borrowerId,
-        reviewed_by,
-        reviewed_at: new Date().toISOString()
-      })
-      .eq('id', req.params.id)
-      .select()
-      .single()
-
-    if (error) throw error
-    return res.json({ status: 'approved', borrowerId })
+    const { transitionStage } = require('../services/pipeline')
+    const updated = await transitionStage(req.params.id, 'loan_processing_officer', req.user, {})
+    return res.json({ status: 'approved', borrowerId: updated.loandisk_borrower_id })
   } catch (error) {
     console.error('Approve error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(400).json({ error: error.message })
   }
 })
 
@@ -249,40 +174,17 @@ router.get('/export/consent', async (req, res) => {
   }
 })
 
-// Decline application
+// Decline application — DEPRECATED: use PATCH /api/pipeline/:id/transition { to_stage: 'declined', meta: { decline_reason } }
+// Kept as a convenience wrapper that delegates to the pipeline transition.
 router.patch('/applications/:id/decline', async (req, res) => {
   try {
-    const { reviewed_by, notes } = req.body
-
-    const { data: app, error: fetchError } = await supabase
-      .from('applications')
-      .select('ci_score')
-      .eq('id', req.params.id)
-      .single()
-
-    if (fetchError) throw fetchError
-
-    if (app.ci_score === null || app.ci_score === undefined) {
-      return res.status(400).json({ error: 'CI form must be completed before declining' })
-    }
-
-    const { data, error } = await supabase
-      .from('applications')
-      .update({
-        status: 'declined',
-        reviewed_by,
-        notes,
-        reviewed_at: new Date().toISOString()
-      })
-      .eq('id', req.params.id)
-      .select()
-      .single()
-
-    if (error) throw error
+    const { transitionStage } = require('../services/pipeline')
+    const { notes } = req.body
+    const updated = await transitionStage(req.params.id, 'declined', req.user, { decline_reason: notes })
     return res.json({ status: 'declined' })
   } catch (error) {
     console.error('Decline error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(400).json({ error: error.message })
   }
 })
 

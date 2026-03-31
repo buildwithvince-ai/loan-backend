@@ -1,18 +1,11 @@
 const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
+const { verifyToken, requireRole } = require('../middleware/auth')
 
 const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer'
 
-const ciAuth = (req, res, next) => {
-  const secret = req.headers['x-ci-secret']
-  if (secret !== process.env.CI_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-  next()
-}
-
-router.use(ciAuth)
+router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin'))
 
 // List pending applications for CI agents
 router.get('/applications', async (req, res) => {

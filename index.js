@@ -21,6 +21,15 @@ app.use('/api/admin', adminRouter)
 const ciRouter = require('./routes/ci')
 app.use('/api/ci', ciRouter)
 
+const authRouter = require('./routes/auth')
+app.use('/api/auth', authRouter)
+
+const usersRouter = require('./routes/users')
+app.use('/api/users', usersRouter)
+
+const pipelineRouter = require('./routes/pipeline')
+app.use('/api/pipeline', pipelineRouter)
+
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
