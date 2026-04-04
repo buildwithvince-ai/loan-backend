@@ -35,7 +35,7 @@ const verifyToken = async (req, res, next) => {
 
     const { data: adminUser, error: dbError } = await supabase
       .from('admin_users')
-      .select('id, email, role, full_name, is_active')
+      .select('id, email, roles, full_name, is_active')
       .eq('id', authUserId)
       .single();
 
@@ -50,7 +50,7 @@ const verifyToken = async (req, res, next) => {
     req.user = {
       id: adminUser.id,
       email: adminUser.email,
-      role: adminUser.role,
+      roles: adminUser.roles || [],
       full_name: adminUser.full_name,
     };
 
@@ -70,9 +70,14 @@ const verifyToken = async (req, res, next) => {
  * Usage:
  *   router.get('/sensitive', verifyToken, requireRole('super_admin', 'admin'), handler)
  */
-const requireRole = (...roles) => {
+const requireRole = (...requiredRoles) => {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    if (!req.user) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    const userRoles = req.user.roles || [];
+    const hasRole = requiredRoles.some((r) => userRoles.includes(r));
+    if (!hasRole) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     return next();

@@ -32,7 +32,8 @@ const TRANSITION_GUARDS = {
 
   'verifier->ci_officer': async (application, user) => {
     const permitted = ['verifier', 'admin', 'super_admin'];
-    if (!permitted.includes(user.role)) {
+    const userRoles = user.roles || [];
+    if (!permitted.some((r) => userRoles.includes(r))) {
       return { allowed: false, reason: 'Only verifiers or admins can advance to CI stage' };
     }
     return { allowed: true, reason: 'Advancing to CI officer' };
@@ -50,8 +51,10 @@ const TRANSITION_GUARDS = {
       return { allowed: false, reason: 'CI score required' };
     }
 
-    if (!['admin', 'super_admin'].includes(user.role)) {
-      return { allowed: false, reason: 'Only admins can approve applications' };
+    const approveRoles = ['admin', 'super_admin', 'approver'];
+    const userRoles = user.roles || [];
+    if (!approveRoles.some((r) => userRoles.includes(r))) {
+      return { allowed: false, reason: 'Only admins or approvers can approve applications' };
     }
 
     // --- Loandisk approval side effect ---
@@ -120,7 +123,8 @@ const TRANSITION_GUARDS = {
 
   'verifier->sales_officer': async (application, user, meta) => {
     const permitted = ['verifier', 'admin', 'super_admin'];
-    if (!permitted.includes(user.role)) {
+    const userRoles = user.roles || [];
+    if (!permitted.some((r) => userRoles.includes(r))) {
       return { allowed: false, reason: 'Only verifiers or admins can return applications' };
     }
     if (!meta || !meta.return_reason) {
@@ -136,8 +140,10 @@ const TRANSITION_GUARDS = {
   },
 
   'approver->declined': async (application, user, meta) => {
-    if (!['admin', 'super_admin'].includes(user.role)) {
-      return { allowed: false, reason: 'Only admins can decline' };
+    const declineRoles = ['admin', 'super_admin', 'approver'];
+    const userRoles = user.roles || [];
+    if (!declineRoles.some((r) => userRoles.includes(r))) {
+      return { allowed: false, reason: 'Only admins or approvers can decline' };
     }
 
     if (!meta || !meta.decline_reason) {
@@ -266,7 +272,7 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
         if (updated.assigned_sales_officer) {
           const { data: fetchedSO } = await supabase
             .from('admin_users')
-            .select('id, email, full_name, role')
+            .select('id, email, full_name, roles')
             .eq('id', updated.assigned_sales_officer)
             .single();
           soUser = fetchedSO || null;
@@ -290,8 +296,10 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
         notifyTeamByRole('ci_officer', updated, { message: 'New application ready for CI' });
 
       } else if (toStage === 'approver') {
-        // Notify admins/super_admins — they are the approvers
+        // Notify all approver roles
         notifyTeamByRole('admin', updated, { message: 'Application ready for final review' });
+        notifyTeamByRole('super_admin', updated, { message: 'Application ready for final review' });
+        notifyTeamByRole('approver', updated, { message: 'Application ready for final review' });
 
       } else if (toStage === 'loan_processing_officer') {
         notifyTeamByRole('loan_processing_officer', updated, { message: 'Application approved — ready for processing' });
@@ -299,7 +307,7 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
         if (updated.assigned_sales_officer) {
           const { data: soUser } = await supabase
             .from('admin_users')
-            .select('id, email, full_name, role')
+            .select('id, email, full_name, roles')
             .eq('id', updated.assigned_sales_officer)
             .single();
           if (soUser) {
@@ -311,7 +319,7 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
         if (updated.assigned_sales_officer) {
           const { data: soUser } = await supabase
             .from('admin_users')
-            .select('id, email, full_name, role')
+            .select('id, email, full_name, roles')
             .eq('id', updated.assigned_sales_officer)
             .single();
           if (soUser) {

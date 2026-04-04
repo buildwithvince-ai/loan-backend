@@ -119,7 +119,7 @@ router.post(
       // Fetch the SO user
       const { data: soUser, error: soError } = await supabase
         .from('admin_users')
-        .select('id, email, full_name, role')
+        .select('id, email, full_name, roles')
         .eq('id', application.assigned_sales_officer)
         .single();
 

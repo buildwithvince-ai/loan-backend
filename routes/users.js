@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('admin_users')
-      .select('id, email, role, full_name, is_active, created_at')
+      .select('id, email, roles, full_name, is_active, created_at')
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -55,24 +55,28 @@ router.get('/', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
-    const { email, password, role, full_name } = req.body;
+    const { email, password, roles, full_name } = req.body;
 
-    if (!email || !password || !role) {
-      return res.status(400).json({ error: 'email, password, and role are required' });
+    if (!email || !password || !roles) {
+      return res.status(400).json({ error: 'email, password, and roles are required' });
     }
 
     const validRoles = [
       'super_admin',
       'admin',
+      'approver',
       'sales_officer',
       'verifier',
       'ci_officer',
       'loan_processing_officer',
     ];
 
-    if (!validRoles.includes(role)) {
+    const rolesArray = Array.isArray(roles) ? roles : [roles];
+
+    const invalid = rolesArray.filter((r) => !validRoles.includes(r));
+    if (invalid.length > 0) {
       return res.status(400).json({
-        error: `role must be one of: ${validRoles.join(', ')}`,
+        error: `Invalid roles: ${invalid.join(', ')}. Must be one of: ${validRoles.join(', ')}`,
       });
     }
 
@@ -100,11 +104,11 @@ router.post('/', async (req, res) => {
       .insert({
         id: authUserId,
         email,
-        role,
+        roles: rolesArray,
         full_name: full_name || null,
         is_active: true,
       })
-      .select('id, email, role, full_name, is_active, created_at')
+      .select('id, email, roles, full_name, is_active, created_at')
       .single();
 
     if (dbError) {
@@ -140,25 +144,32 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { role, is_active } = req.body;
+    const { roles, is_active, full_name } = req.body;
 
     const updates = {};
 
-    if (role !== undefined) {
+    if (full_name !== undefined) {
+      updates.full_name = full_name || null;
+    }
+
+    if (roles !== undefined) {
       const validRoles = [
         'super_admin',
         'admin',
+        'approver',
         'sales_officer',
         'verifier',
         'ci_officer',
         'loan_processing_officer',
       ];
-      if (!validRoles.includes(role)) {
+      const rolesArray = Array.isArray(roles) ? roles : [roles];
+      const invalid = rolesArray.filter((r) => !validRoles.includes(r));
+      if (invalid.length > 0) {
         return res.status(400).json({
-          error: `role must be one of: ${validRoles.join(', ')}`,
+          error: `Invalid roles: ${invalid.join(', ')}. Must be one of: ${validRoles.join(', ')}`,
         });
       }
-      updates.role = role;
+      updates.roles = rolesArray;
     }
 
     if (is_active !== undefined) {
@@ -176,7 +187,7 @@ router.patch('/:id', async (req, res) => {
       .from('admin_users')
       .update(updates)
       .eq('id', id)
-      .select('id, email, role, full_name, is_active, created_at')
+      .select('id, email, roles, full_name, is_active, created_at')
       .single();
 
     if (dbError) {

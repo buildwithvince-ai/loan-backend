@@ -106,7 +106,7 @@ router.post('/submit', upload.any(), async (req, res) => {
         .from('admin_users')
         .select('id')
         .eq('id', formData.sales_officer_id)
-        .eq('role', 'sales_officer')
+        .contains('roles', ['sales_officer'])
         .eq('is_active', true)
         .maybeSingle();
 
@@ -254,7 +254,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         .from('admin_users')
         .select('id')
         .eq('id', req.body.sales_officer_id)
-        .eq('role', 'sales_officer')
+        .contains('roles', ['sales_officer'])
         .eq('is_active', true)
         .maybeSingle();
 

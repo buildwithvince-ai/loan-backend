@@ -165,8 +165,8 @@ async function notifyTeamByRole(role, application, context) {
   try {
     const { data: users, error } = await supabase
       .from('admin_users')
-      .select('id, email, full_name, role')
-      .eq('role', role)
+      .select('id, email, full_name, roles')
+      .contains('roles', [role])
       .eq('is_active', true);
 
     if (error) {

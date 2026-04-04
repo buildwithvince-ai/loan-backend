@@ -202,8 +202,8 @@ router.get('/:token', async (req, res) => {
     // 6. Fetch approver team (admin + super_admin, active only)
     const { data: approverTeam, error: approverError } = await supabase
       .from('admin_users')
-      .select('id, email, full_name, role')
-      .in('role', ['admin', 'super_admin'])
+      .select('id, email, full_name, roles')
+      .or('roles.cs.{"admin"},roles.cs.{"super_admin"},roles.cs.{"approver"}')
       .eq('is_active', true);
 
     if (approverError) {

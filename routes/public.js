@@ -9,7 +9,7 @@ router.get('/sales-officers', async (req, res) => {
     const { data, error } = await supabase
       .from('admin_users')
       .select('id, full_name')
-      .eq('role', 'sales_officer')
+      .contains('roles', ['sales_officer'])
       .eq('is_active', true)
       .order('full_name', { ascending: true })
 
