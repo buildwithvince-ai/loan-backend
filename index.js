@@ -30,6 +30,12 @@ app.use('/api/users', usersRouter)
 const pipelineRouter = require('./routes/pipeline')
 app.use('/api/pipeline', pipelineRouter)
 
+const confirmRouter = require('./routes/confirm')
+app.use('/api/confirm', confirmRouter)
+
+const publicRouter = require('./routes/public')
+app.use('/api/public', publicRouter)
+
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)

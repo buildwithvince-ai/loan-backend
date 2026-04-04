@@ -99,6 +99,22 @@ router.post('/submit', upload.any(), async (req, res) => {
     const formData = req.body
     const files = req.files || []
 
+    // Validate sales_officer_id if provided
+    let assigned_sales_officer = null;
+    if (formData.sales_officer_id) {
+      const { data: soCheck } = await supabase
+        .from('admin_users')
+        .select('id')
+        .eq('id', formData.sales_officer_id)
+        .eq('role', 'sales_officer')
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (soCheck) {
+        assigned_sales_officer = soCheck.id;
+      }
+    }
+
     // Step 1 — Check for existing pending application with same phone
     const { data: existing } = await supabase
       .from('applications')
@@ -197,6 +213,7 @@ router.post('/submit', upload.any(), async (req, res) => {
         finscore_normalized,
         status: 'pending',
         stage: 'sales_officer',
+        assigned_sales_officer,
         file_metadata,
         consent_agreed,
         consent_agreed_at,
@@ -229,6 +246,23 @@ router.post('/submit-group', upload.any(), async (req, res) => {
 
     // Check for existing pending application with leader's phone
     const leader = members[0]
+
+    // Validate sales_officer_id if provided
+    let assigned_sales_officer = null;
+    if (req.body.sales_officer_id) {
+      const { data: soCheck } = await supabase
+        .from('admin_users')
+        .select('id')
+        .eq('id', req.body.sales_officer_id)
+        .eq('role', 'sales_officer')
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (soCheck) {
+        assigned_sales_officer = soCheck.id;
+      }
+    }
+
     const { data: existing } = await supabase
       .from('applications')
       .select('id')
@@ -366,6 +400,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         finscore_normalized,
         status: 'pending',
         stage: 'sales_officer',
+        assigned_sales_officer,
         file_metadata,
         group_members: members,
         consent_agreed,

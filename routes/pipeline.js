@@ -88,4 +88,63 @@ router.patch(
   }
 );
 
+// ---------------------------------------------------------------------------
+// POST /:id/so-confirmation
+// Initiate SO confirmation email with confirm/decline tokens.
+// Restricted to admin and super_admin.
+// ---------------------------------------------------------------------------
+router.post(
+  '/:id/so-confirmation',
+  requireRole('admin', 'super_admin'),
+  async (req, res) => {
+    try {
+      const { generateConfirmationTokens } = require('../services/tokens');
+      const { sendSOConfirmationRequest } = require('../services/email');
+
+      // Fetch the application
+      const { data: application, error: appError } = await supabase
+        .from('applications')
+        .select('*')
+        .eq('id', req.params.id)
+        .single();
+
+      if (appError || !application) {
+        return res.status(404).json({ error: 'Application not found' });
+      }
+
+      if (!application.assigned_sales_officer) {
+        return res.status(400).json({ error: 'No sales officer assigned to this application' });
+      }
+
+      // Fetch the SO user
+      const { data: soUser, error: soError } = await supabase
+        .from('admin_users')
+        .select('id, email, full_name, role')
+        .eq('id', application.assigned_sales_officer)
+        .single();
+
+      if (soError || !soUser) {
+        return res.status(400).json({ error: 'Assigned sales officer not found' });
+      }
+
+      // Generate confirm/decline tokens
+      const { confirmToken, declineToken } = await generateConfirmationTokens(req.params.id);
+
+      // Send the confirmation email — awaited intentionally (this IS the purpose of the route)
+      await sendSOConfirmationRequest(soUser, application, confirmToken, declineToken);
+
+      // Record the timestamp the confirmation was sent
+      await supabase
+        .from('applications')
+        .update({ so_confirmation_sent_at: new Date().toISOString() })
+        .eq('id', req.params.id);
+
+      return res.json({ message: 'SO confirmation email sent', sent_to: soUser.email });
+    } catch (error) {
+      console.error('[pipeline] so-confirmation error:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 module.exports = router;

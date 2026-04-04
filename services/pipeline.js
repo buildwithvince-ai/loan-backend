@@ -2,6 +2,7 @@
 
 const { supabase } = require('./supabase');
 const { createBorrower, uploadAllFiles } = require('./loandisk');
+const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
 
 const VALID_STAGES = [
   'sales_officer',
@@ -117,6 +118,23 @@ const TRANSITION_GUARDS = {
     return { allowed: true, reason: 'Approved and pushed to Loandisk' };
   },
 
+  'verifier->sales_officer': async (application, user, meta) => {
+    const permitted = ['verifier', 'admin', 'super_admin'];
+    if (!permitted.includes(user.role)) {
+      return { allowed: false, reason: 'Only verifiers or admins can return applications' };
+    }
+    if (!meta || !meta.return_reason) {
+      return { allowed: false, reason: 'Return reason is required' };
+    }
+    // Increment returned_count
+    const currentCount = application.returned_count || 0;
+    await supabase
+      .from('applications')
+      .update({ returned_count: currentCount + 1 })
+      .eq('id', application.id);
+    return { allowed: true, reason: 'Returned to sales officer' };
+  },
+
   'approver->declined': async (application, user, meta) => {
     if (!['admin', 'super_admin'].includes(user.role)) {
       return { allowed: false, reason: 'Only admins can decline' };
@@ -179,9 +197,13 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
   const fromIndex = VALID_STAGES.indexOf(currentStage);
   const toIndex = VALID_STAGES.indexOf(toStage);
 
-  // Block backward moves
+  // Block backward moves, unless an explicit guard exists for this specific pair
   if (toIndex < fromIndex) {
-    throw new Error('Backward stage transitions are not allowed');
+    const backwardGuardKey = `${currentStage}->${toStage}`;
+    if (!TRANSITION_GUARDS[backwardGuardKey]) {
+      throw new Error('Backward stage transitions are not allowed');
+    }
+    // Guard exists — fall through to normal guard execution below
   }
 
   // Same stage is a no-op but still blocked to keep history clean
@@ -234,6 +256,73 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
   if (updateError) {
     throw new Error('Failed to update stage: ' + updateError.message);
   }
+
+  // Fire-and-forget automation hooks — email failures must never break the response
+  (async () => {
+    try {
+      if (toStage === 'sales_officer') {
+        // Triggered on verifier->sales_officer return
+        let soUser = null;
+        if (updated.assigned_sales_officer) {
+          const { data: fetchedSO } = await supabase
+            .from('admin_users')
+            .select('id, email, full_name, role')
+            .eq('id', updated.assigned_sales_officer)
+            .single();
+          soUser = fetchedSO || null;
+        }
+
+        if (soUser) {
+          // If this is a return (has return_reason), send the return notification
+          if (meta && meta.return_reason) {
+            notifySOReturn(soUser, updated, meta.return_reason);
+          } else {
+            notifySalesOfficer(soUser, updated);
+          }
+        } else {
+          notifyTeamByRole('sales_officer', updated, { message: 'Unassigned lead needs pickup' });
+        }
+
+      } else if (toStage === 'verifier') {
+        notifyTeamByRole('verifier', updated, { message: 'New application ready for verification' });
+
+      } else if (toStage === 'ci_officer') {
+        notifyTeamByRole('ci_officer', updated, { message: 'New application ready for CI' });
+
+      } else if (toStage === 'approver') {
+        // Notify admins/super_admins — they are the approvers
+        notifyTeamByRole('admin', updated, { message: 'Application ready for final review' });
+
+      } else if (toStage === 'loan_processing_officer') {
+        notifyTeamByRole('loan_processing_officer', updated, { message: 'Application approved — ready for processing' });
+        // Also notify the assigned SO of the approval decision
+        if (updated.assigned_sales_officer) {
+          const { data: soUser } = await supabase
+            .from('admin_users')
+            .select('id, email, full_name, role')
+            .eq('id', updated.assigned_sales_officer)
+            .single();
+          if (soUser) {
+            notifySODecision(soUser, updated, 'Approved');
+          }
+        }
+
+      } else if (toStage === 'declined') {
+        if (updated.assigned_sales_officer) {
+          const { data: soUser } = await supabase
+            .from('admin_users')
+            .select('id, email, full_name, role')
+            .eq('id', updated.assigned_sales_officer)
+            .single();
+          if (soUser) {
+            notifySODecision(soUser, updated, 'Declined');
+          }
+        }
+      }
+    } catch (hookErr) {
+      console.error('[pipeline] Automation hook error:', hookErr.message);
+    }
+  })();
 
   return updated;
 };
