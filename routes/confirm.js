@@ -159,23 +159,9 @@ router.get('/:token', async (req, res) => {
       return res.status(500).send(errorPage());
     }
 
-    // 4. Update so_decision and so_decision_at
+    // 4. Update so_decision, so_decision_at, and move stage back to approver
     const now = new Date().toISOString();
 
-    const { error: updateError } = await supabase
-      .from('applications')
-      .update({
-        so_decision: action,
-        so_decision_at: now,
-      })
-      .eq('id', application_id);
-
-    if (updateError) {
-      console.error('[confirm] Failed to update so_decision:', updateError.message);
-      return res.status(500).send(errorPage());
-    }
-
-    // 5. Append to stage_history
     const currentHistory = Array.isArray(application.stage_history)
       ? application.stage_history
       : [];
@@ -189,14 +175,19 @@ router.get('/:token', async (req, res) => {
       },
     ];
 
-    const { error: historyError } = await supabase
+    const { error: updateError } = await supabase
       .from('applications')
-      .update({ stage_history: updatedHistory })
+      .update({
+        so_decision: action,
+        so_decision_at: now,
+        stage: 'approver',
+        stage_history: updatedHistory,
+      })
       .eq('id', application_id);
 
-    if (historyError) {
-      console.error('[confirm] Failed to update stage_history:', historyError.message);
-      // Non-fatal — continue
+    if (updateError) {
+      console.error('[confirm] Failed to update application:', updateError.message);
+      return res.status(500).send(errorPage());
     }
 
     // 6. Fetch approver team (admin + super_admin, active only)
