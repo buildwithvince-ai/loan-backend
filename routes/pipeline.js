@@ -95,7 +95,7 @@ router.patch(
 // ---------------------------------------------------------------------------
 router.post(
   '/:id/so-confirmation',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'approver'),
   async (req, res) => {
     try {
       const { generateConfirmationTokens } = require('../services/tokens');
