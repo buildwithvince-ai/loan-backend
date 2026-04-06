@@ -3,9 +3,9 @@ const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
 
-router.use(verifyToken, requireRole('admin', 'super_admin'))
+router.use(verifyToken)
 
-// List all applications
+// List all applications (all authenticated users)
 router.get('/applications', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -56,7 +56,7 @@ router.get('/applications/phone/:phone', async (req, res) => {
 })
 
 // Submit CI score and calculate final score + tier
-router.patch('/applications/:id/ci-score', async (req, res) => {
+router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin'), async (req, res) => {
   try {
     const {
       ci_score, notes, reviewed_by,
@@ -113,7 +113,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
 
 // Approve application — DEPRECATED: use PATCH /api/pipeline/:id/transition { to_stage: 'loan_processing_officer' }
 // Kept as a convenience wrapper that delegates to the pipeline transition.
-router.patch('/applications/:id/approve', async (req, res) => {
+router.patch('/applications/:id/approve', requireRole('admin', 'super_admin'), async (req, res) => {
   try {
     const { transitionStage } = require('../services/pipeline')
     const updated = await transitionStage(req.params.id, 'loan_processing_officer', req.user, {})
@@ -125,7 +125,7 @@ router.patch('/applications/:id/approve', async (req, res) => {
 })
 
 // Export consent report as CSV
-router.get('/export/consent', async (req, res) => {
+router.get('/export/consent', requireRole('admin', 'super_admin'), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('applications')
@@ -176,7 +176,7 @@ router.get('/export/consent', async (req, res) => {
 
 // Decline application — DEPRECATED: use PATCH /api/pipeline/:id/transition { to_stage: 'declined', meta: { decline_reason } }
 // Kept as a convenience wrapper that delegates to the pipeline transition.
-router.patch('/applications/:id/decline', async (req, res) => {
+router.patch('/applications/:id/decline', requireRole('admin', 'super_admin'), async (req, res) => {
   try {
     const { transitionStage } = require('../services/pipeline')
     const { notes } = req.body
