@@ -23,7 +23,12 @@ const VALID_STAGES = [
 
 const TRANSITION_GUARDS = {
 
-  'sales_officer->verifier': async (application) => {
+  'sales_officer->verifier': async (application, user) => {
+    const permitted = ['sales_officer', 'admin', 'super_admin'];
+    const userRoles = user.roles || [];
+    if (!permitted.some((r) => userRoles.includes(r))) {
+      return { allowed: false, reason: 'Only sales officers or admins can advance to verifier' };
+    }
     if (!application.assigned_sales_officer) {
       return { allowed: false, reason: 'Sales officer must be assigned before advancing' };
     }
@@ -39,7 +44,12 @@ const TRANSITION_GUARDS = {
     return { allowed: true, reason: 'Advancing to CI officer' };
   },
 
-  'ci_officer->approver': async (application) => {
+  'ci_officer->approver': async (application, user) => {
+    const permitted = ['ci_officer', 'admin', 'super_admin'];
+    const userRoles = user.roles || [];
+    if (!permitted.some((r) => userRoles.includes(r))) {
+      return { allowed: false, reason: 'Only CI officers or admins can advance to approver' };
+    }
     if (application.ci_score === null || application.ci_score === undefined) {
       return { allowed: false, reason: 'CI score must be submitted before advancing to approver' };
     }
