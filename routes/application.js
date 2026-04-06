@@ -441,4 +441,200 @@ router.post('/test-finscore', async (req, res) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// Test email automation
+// POST /api/application/test-email
+// Body: { to, template }
+// Templates: sales_officer, team_unassigned, team_verifier, team_ci,
+//   team_approver, team_lpo, so_return, so_decision_approved,
+//   so_decision_declined_verification, so_decision_declined_approval,
+//   confirmation, approver_so_decision
+// ---------------------------------------------------------------------------
+router.post('/test-email', async (req, res) => {
+  try {
+    const {
+      sendEmail,
+      notifySalesOfficer,
+      notifySOReturn,
+      notifySODecision,
+      sendSOConfirmationRequest,
+      notifyApproverSODecision,
+    } = require('../services/email');
+
+    const { to, template } = req.body;
+    if (!to) {
+      return res.status(400).json({ status: 'error', message: 'to (email address) is required' });
+    }
+
+    const mockApp = {
+      id: 'test-uuid',
+      reference_id: 'GR8-TEST-001',
+      full_name: 'Juan Dela Cruz',
+      loan_type: 'Personal',
+      loan_amount: 25000,
+      loan_term: 12,
+      phone: '09171234567',
+      final_score: 78.50,
+      tier: 'tier_b',
+      ci_recommended_amount: 20000,
+      assigned_sales_officer_name: 'Test Sales Officer',
+      stage_history: [],
+    };
+
+    const mockUser = { id: 'test-so-id', email: to, full_name: 'Test Sales Officer', roles: ['sales_officer'] };
+
+    const selected = template || 'all';
+
+    // Helper to build role-specific team emails directly (bypasses DB lookup)
+    const { default: axios } = require('axios');
+    const buildTeamEmail = async (role) => {
+      // We call sendEmail directly with the same logic notifyTeamByRole uses,
+      // but skip the DB user lookup so we can test the template rendering.
+      const emailMod = require('../services/email');
+      // Temporarily override — send directly to test address
+      const roleSubjects = {
+        sales_officer: `Unassigned Application: ${mockApp.reference_id}`,
+        verifier: `New Application for Verification: ${mockApp.reference_id}`,
+        ci_officer: `New Application for CI: ${mockApp.reference_id}`,
+        approver: `Application Ready for Approval: ${mockApp.reference_id}`,
+        loan_processing_officer: `Application Approved — Ready for Processing: ${mockApp.reference_id}`,
+      };
+      const roleIntros = {
+        sales_officer: 'A new application has been submitted without an assigned Sales Officer.',
+        verifier: 'An application is ready for your verification.',
+        ci_officer: 'An application has passed verification and is ready for Credit Investigation.',
+        approver: 'An application has completed Credit Investigation and is ready for final review.',
+        loan_processing_officer: 'The following application has been approved and is ready for loan processing and fund release.',
+      };
+      const roleCtas = {
+        sales_officer: 'Please assign this lead immediately.',
+        verifier: 'Log in to the dashboard to proceed.',
+        ci_officer: 'Log in to the CI portal to proceed.',
+        approver: 'Log in to the dashboard to review scores and make a decision.',
+        loan_processing_officer: 'Log in to the dashboard to proceed.',
+      };
+
+      // Use raw sendEmail to bypass the DB user lookup
+      await emailMod.sendEmail({
+        to,
+        subject: roleSubjects[role],
+        htmlBody: buildTestTeamHtml(roleIntros[role], mockApp, roleCtas[role]),
+      });
+    };
+
+    const VALID_TEMPLATES = [
+      'all', 'sales_officer', 'team_unassigned', 'team_verifier', 'team_ci',
+      'team_approver', 'team_lpo', 'so_return', 'so_decision_approved',
+      'so_decision_declined_verification', 'so_decision_declined_approval',
+      'confirmation', 'approver_so_decision',
+    ];
+
+    if (!VALID_TEMPLATES.includes(selected)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Unknown template: ${selected}. Valid: ${VALID_TEMPLATES.join(', ')}`,
+      });
+    }
+
+    const results = [];
+
+    const run = async (name, fn) => {
+      await fn();
+      results.push(name);
+    };
+
+    if (selected === 'all' || selected === 'sales_officer') {
+      await run('sales_officer', () => notifySalesOfficer(mockUser, mockApp));
+    }
+    if (selected === 'all' || selected === 'team_unassigned') {
+      await run('team_unassigned', () => buildTeamEmail('sales_officer'));
+    }
+    if (selected === 'all' || selected === 'team_verifier') {
+      await run('team_verifier', () => buildTeamEmail('verifier'));
+    }
+    if (selected === 'all' || selected === 'team_ci') {
+      await run('team_ci', () => buildTeamEmail('ci_officer'));
+    }
+    if (selected === 'all' || selected === 'team_approver') {
+      await run('team_approver', () => buildTeamEmail('approver'));
+    }
+    if (selected === 'all' || selected === 'team_lpo') {
+      await run('team_lpo', () => buildTeamEmail('loan_processing_officer'));
+    }
+    if (selected === 'all' || selected === 'so_return') {
+      await run('so_return', () => notifySOReturn(mockUser, mockApp, 'Missing income documents — please re-upload.'));
+    }
+    if (selected === 'all' || selected === 'so_decision_approved') {
+      await run('so_decision_approved', () => notifySODecision(mockUser, mockApp, 'Approved'));
+    }
+    if (selected === 'all' || selected === 'so_decision_declined_verification') {
+      const appWithVerifierHistory = { ...mockApp, stage_history: [{ from: 'verifier', to: 'declined' }] };
+      await run('so_decision_declined_verification', () => notifySODecision(mockUser, appWithVerifierHistory, 'Declined'));
+    }
+    if (selected === 'all' || selected === 'so_decision_declined_approval') {
+      const appWithApproverHistory = { ...mockApp, stage_history: [{ from: 'approver', to: 'declined' }] };
+      await run('so_decision_declined_approval', () => notifySODecision(mockUser, appWithApproverHistory, 'Declined'));
+    }
+    if (selected === 'all' || selected === 'confirmation') {
+      await run('confirmation', () => sendSOConfirmationRequest(mockUser, mockApp, 'test-confirm-token', 'test-decline-token'));
+    }
+    if (selected === 'all' || selected === 'approver_so_decision') {
+      await run('approver_so_decision', () => notifyApproverSODecision([mockUser], mockApp, 'confirm'));
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      message: `Sent ${results.length} test email(s) to ${to}`,
+      templates_sent: results,
+    });
+  } catch (error) {
+    console.error('Email test error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// Helper for test endpoint — builds team notification HTML without DB lookup
+function buildTestTeamHtml(intro, application, cta) {
+  const DASHBOARD_URL = 'https://gr8lendingcorporation.com/admin';
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:32px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background-color:#1a3c6e;padding:24px 32px;">
+          <p style="margin:0;font-size:20px;font-weight:700;color:#ffffff;letter-spacing:0.5px;">GR8 Lending Corporation</p>
+          <p style="margin:4px 0 0;font-size:12px;color:#a8c0e8;">gr8lendingcorporation.com</p>
+        </td></tr>
+        <tr><td style="padding:32px;">
+          <p style="margin:0 0 16px;font-size:14px;color:#374151;">Hi Team,</p>
+          <p style="margin:0 0 8px;font-size:14px;color:#374151;">${intro}</p>
+          <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Applicant:</strong> ${application.full_name || '—'}</td></tr>
+            <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Loan Type:</strong> ${application.loan_type || '—'}</td></tr>
+            <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Phone:</strong> ${application.phone || '—'}</td></tr>
+            <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Reference ID:</strong> ${application.reference_id || '—'}</td></tr>
+          </table>
+          <p style="margin:0 0 8px;font-size:14px;color:#374151;">${cta}</p>
+          <p style="margin:24px 0 0;">
+            <a href="${DASHBOARD_URL}" target="_blank"
+               style="display:inline-block;background-color:#1a3c6e;color:#ffffff;font-size:14px;
+                      font-weight:600;text-decoration:none;padding:12px 24px;border-radius:6px;">
+              Log in to Dashboard
+            </a>
+          </p>
+          <p style="margin:24px 0 0;font-size:14px;color:#374151;">GR8 Lending Corporation</p>
+        </td></tr>
+        <tr><td style="background-color:#f9fafb;border-top:1px solid #e5e7eb;padding:16px 32px;">
+          <p style="margin:0;font-size:11px;color:#9ca3af;text-align:center;">This is an automated notification from GR8 Lending Corporation.<br>Please do not reply to this email.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+}
+
 module.exports = router
