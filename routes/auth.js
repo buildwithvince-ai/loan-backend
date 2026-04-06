@@ -110,4 +110,57 @@ router.get('/me', verifyToken, (req, res) => {
   return res.status(200).json(req.user);
 });
 
+/**
+ * PATCH /change-password
+ *
+ * Changes the authenticated user's password.
+ * Verifies the current password before updating.
+ *
+ * Body: { current_password: string, new_password: string }
+ *
+ * Responses:
+ *   200 { message: 'Password updated successfully' }
+ *   400 { error: 'current_password and new_password are required' }
+ *   401 { error: 'Current password is incorrect' }
+ *   500 { error: 'Failed to update password' }
+ */
+router.patch('/change-password', verifyToken, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+
+    if (!current_password || !new_password) {
+      return res.status(400).json({ error: 'current_password and new_password are required' });
+    }
+
+    if (new_password.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+
+    // Verify current password by attempting sign-in
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: req.user.email,
+      password: current_password,
+    });
+
+    if (signInError) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    // Update password via admin API
+    const { error: updateError } = await supabase.auth.admin.updateUserById(req.user.id, {
+      password: new_password,
+    });
+
+    if (updateError) {
+      console.error('[auth] PATCH /change-password update error:', updateError);
+      return res.status(500).json({ error: 'Failed to update password' });
+    }
+
+    return res.status(200).json({ message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('[auth] PATCH /change-password error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = router;
