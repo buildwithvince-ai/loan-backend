@@ -241,7 +241,9 @@ router.post('/submit', upload.any(), async (req, res) => {
 router.post('/submit-group', upload.any(), async (req, res) => {
   try {
     const { loanType, totalLoanAmount, loanTerm, groupName } = req.body
-    const members = JSON.parse(req.body.members)
+    const members = typeof req.body.members === 'string'
+      ? JSON.parse(req.body.members)
+      : req.body.members
     const files = req.files || []
 
     // Check for existing pending application with leader's phone
