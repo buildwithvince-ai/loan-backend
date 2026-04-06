@@ -1,19 +1,20 @@
 {
   "info": {
     "name": "GR8 Lending — Loan Submit Tests",
-    "description": "Bulk tests for all 5 loan form submissions. Tests income validation, amount limits, and field mapping.",
+    "description": "Full test suite for all 5 loan products. Covers valid submissions, pre-qualification declines, and field mapping.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "baseUrl", "value": "https://loan-backend-production-cd45.up.railway.app" },
-    { "key": "soId", "value": "71dbd005-a56f-4e02-829b-ffec86293b55" }
+    { "key": "soTroy", "value": "71dbd005-a56f-4e02-829b-ffec86293b55" },
+    { "key": "soDennis", "value": "e1a3b182-021c-437b-9eb3-e4fa9a6eed1a" }
   ],
   "item": [
     {
-      "name": "Cleanup Test Data",
+      "name": "0 — Cleanup Test Data",
       "item": [
         {
-          "name": "Delete test apps (0917 prefix)",
+          "name": "Delete 0917 test apps",
           "request": {
             "method": "DELETE",
             "url": "{{baseUrl}}/api/application/test-cleanup?prefix=0917"
@@ -34,10 +35,10 @@
       ]
     },
     {
-      "name": "Personal Loan",
+      "name": "1 — Personal Loan",
       "item": [
         {
-          "name": "Personal — Valid (₱20K income, ₱15K amount)",
+          "name": "Personal — Valid (₱20K income, ₱15K amount) → Troy",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit",
@@ -45,44 +46,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "personal" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "15000" },
-                { "key": "paymentTerm", "value": "6" },
-                { "key": "purpose", "value": "Emergency expenses" },
-                { "key": "firstName", "value": "Maria" },
-                { "key": "middleName", "value": "Santos" },
-                { "key": "lastName", "value": "TestPersonal" },
-                { "key": "dateOfBirth", "value": "1990-05-15" },
+                { "key": "firstName", "value": "Juan" },
+                { "key": "lastName", "value": "Dela Cruz" },
+                { "key": "dob", "value": "1990-05-15" },
                 { "key": "civilStatus", "value": "Single" },
                 { "key": "mobile", "value": "09171000001" },
-                { "key": "email", "value": "personal.valid@test.com" },
-                { "key": "tin", "value": "123-456-789" },
-                { "key": "presentHouseStreet", "value": "123 Rizal St" },
-                { "key": "barangay", "value": "Poblacion" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "5 years" },
-                { "key": "permanentHouseStreet", "value": "123 Rizal St" },
-                { "key": "permanentBarangay", "value": "Poblacion" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "5 years" },
+                { "key": "email", "value": "juan.personal@test.com" },
                 { "key": "employmentStatus", "value": "Employee" },
-                { "key": "employerName", "value": "ABC Corp" },
                 { "key": "monthlyIncome", "value": "20000" },
-                { "key": "lengthOfEmployment", "value": "3 years" },
-                { "key": "refAName", "value": "Juan Cruz" },
-                { "key": "refARelationship", "value": "Friend" },
-                { "key": "refAContact", "value": "09171000010" },
-                { "key": "refBName", "value": "Ana Reyes" },
-                { "key": "refBRelationship", "value": "Colleague" },
-                { "key": "refBContact", "value": "09171000011" },
-                { "key": "refCName", "value": "Pedro Garcia" },
-                { "key": "refCRelationship", "value": "Neighbor" },
-                { "key": "refCContact", "value": "09171000012" }
+                { "key": "loanType", "value": "personal" },
+                { "key": "loanAmount", "value": "15000" },
+                { "key": "loanTerm", "value": "6" },
+                { "key": "houseStreet", "value": "123 Main St" },
+                { "key": "barangay", "value": "Poblacion" },
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soTroy}}" }
               ]
             }
           },
@@ -108,42 +88,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "personal" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "10000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "purpose", "value": "Test decline" },
                 { "key": "firstName", "value": "Low" },
-                { "key": "lastName", "value": "IncomePersonal" },
-                { "key": "dateOfBirth", "value": "1990-05-15" },
+                { "key": "lastName", "value": "Income" },
+                { "key": "dob", "value": "1990-05-15" },
                 { "key": "civilStatus", "value": "Single" },
                 { "key": "mobile", "value": "09171000002" },
-                { "key": "email", "value": "personal.decline@test.com" },
-                { "key": "presentHouseStreet", "value": "456 Test St" },
-                { "key": "barangay", "value": "San Jose" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "2 years" },
-                { "key": "permanentHouseStreet", "value": "456 Test St" },
-                { "key": "permanentBarangay", "value": "San Jose" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "2 years" },
+                { "key": "email", "value": "low.personal@test.com" },
                 { "key": "employmentStatus", "value": "Employee" },
-                { "key": "employerName", "value": "XYZ Inc" },
                 { "key": "monthlyIncome", "value": "10000" },
-                { "key": "lengthOfEmployment", "value": "1 year" },
-                { "key": "refAName", "value": "Ref A" },
-                { "key": "refARelationship", "value": "Friend" },
-                { "key": "refAContact", "value": "09171000020" },
-                { "key": "refBName", "value": "Ref B" },
-                { "key": "refBRelationship", "value": "Friend" },
-                { "key": "refBContact", "value": "09171000021" },
-                { "key": "refCName", "value": "Ref C" },
-                { "key": "refCRelationship", "value": "Friend" },
-                { "key": "refCContact", "value": "09171000022" }
+                { "key": "loanType", "value": "personal" },
+                { "key": "loanAmount", "value": "15000" },
+                { "key": "loanTerm", "value": "6" },
+                { "key": "houseStreet", "value": "456 Low St" },
+                { "key": "barangay", "value": "Test" },
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soTroy}}" }
               ]
             }
           },
@@ -161,7 +122,7 @@
           ]
         },
         {
-          "name": "Personal — Missing monthlyIncome field",
+          "name": "Personal — Decline (₱50K amount, exceeds ₱30K max)",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit",
@@ -169,40 +130,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "personal" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "15000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "firstName", "value": "No" },
-                { "key": "lastName", "value": "IncomeField" },
-                { "key": "dateOfBirth", "value": "1990-05-15" },
+                { "key": "firstName", "value": "Over" },
+                { "key": "lastName", "value": "Limit" },
+                { "key": "dob", "value": "1990-05-15" },
                 { "key": "civilStatus", "value": "Single" },
                 { "key": "mobile", "value": "09171000003" },
-                { "key": "email", "value": "personal.noincome@test.com" },
-                { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "789 St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "789 St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" },
+                { "key": "email", "value": "over.personal@test.com" },
                 { "key": "employmentStatus", "value": "Employee" },
-                { "key": "employerName", "value": "Test Co" },
-                { "key": "lengthOfEmployment", "value": "1 year" },
-                { "key": "refAName", "value": "A" },
-                { "key": "refARelationship", "value": "Friend" },
-                { "key": "refAContact", "value": "09171000030" },
-                { "key": "refBName", "value": "B" },
-                { "key": "refBRelationship", "value": "Friend" },
-                { "key": "refBContact", "value": "09171000031" },
-                { "key": "refCName", "value": "C" },
-                { "key": "refCRelationship", "value": "Friend" },
-                { "key": "refCContact", "value": "09171000032" }
+                { "key": "monthlyIncome", "value": "25000" },
+                { "key": "loanType", "value": "personal" },
+                { "key": "loanAmount", "value": "50000" },
+                { "key": "loanTerm", "value": "6" },
+                { "key": "houseStreet", "value": "789 Over St" },
+                { "key": "barangay", "value": "Test" },
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soDennis}}" }
               ]
             }
           },
@@ -212,8 +156,8 @@
               "script": {
                 "exec": [
                   "const res = pm.response.json();",
-                  "pm.test('Declined — no income field sent', () => pm.expect(res.status).to.eql('declined'));",
-                  "pm.test('Reason mentions income', () => pm.expect(res.reasons.join(' ')).to.include('income'));"
+                  "pm.test('Status is declined', () => pm.expect(res.status).to.eql('declined'));",
+                  "pm.test('Reason mentions amount', () => pm.expect(res.reasons.join(' ')).to.include('Loan amount'));"
                 ]
               }
             }
@@ -222,10 +166,10 @@
       ]
     },
     {
-      "name": "SME Loan",
+      "name": "2 — SME Loan",
       "item": [
         {
-          "name": "SME — Valid (₱50K income, ₱100K amount)",
+          "name": "SME — Valid (₱50K income, ₱100K amount) → Dennis",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit",
@@ -233,47 +177,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "sme" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "100000" },
-                { "key": "paymentTerm", "value": "12" },
-                { "key": "purpose", "value": "Business expansion" },
-                { "key": "businessName", "value": "Test Enterprises" },
-                { "key": "businessType", "value": "Retail" },
-                { "key": "dtiSecNumber", "value": "DTI-12345" },
-                { "key": "dateEstablished", "value": "2020-01-01" },
-                { "key": "businessStreet", "value": "100 Commerce St" },
-                { "key": "businessBarangay", "value": "Poblacion" },
-                { "key": "businessCity", "value": "Malolos" },
-                { "key": "businessProvince", "value": "Bulacan" },
-                { "key": "businessZip", "value": "3000" },
-                { "key": "monthlyIncome", "value": "50000" },
-                { "key": "firstName", "value": "Carlos" },
-                { "key": "middleName", "value": "Reyes" },
-                { "key": "lastName", "value": "TestSME" },
-                { "key": "dateOfBirth", "value": "1985-03-20" },
+                { "key": "firstName", "value": "Carlo" },
+                { "key": "lastName", "value": "Mendoza" },
+                { "key": "dob", "value": "1985-08-20" },
                 { "key": "civilStatus", "value": "Married" },
                 { "key": "mobile", "value": "09172000001" },
-                { "key": "email", "value": "sme.valid@test.com" },
-                { "key": "tin", "value": "987-654-321" },
-                { "key": "presentHouseStreet", "value": "200 Main St" },
-                { "key": "barangay", "value": "San Pablo" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "10 years" },
-                { "key": "permanentHouseStreet", "value": "200 Main St" },
-                { "key": "permanentBarangay", "value": "San Pablo" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "10 years" },
-                { "key": "supplier1Name", "value": "Supplier A" },
-                { "key": "supplier1Contact", "value": "09170000001" },
-                { "key": "supplier1Number", "value": "SUP-001" },
-                { "key": "customer1Name", "value": "Customer A" },
-                { "key": "customer1Contact", "value": "09170000002" },
-                { "key": "customer1Number", "value": "CUS-001" }
+                { "key": "email", "value": "carlo.sme@test.com" },
+                { "key": "employmentStatus", "value": "Business Owner" },
+                { "key": "monthlyIncome", "value": "50000" },
+                { "key": "loanType", "value": "sme" },
+                { "key": "loanAmount", "value": "100000" },
+                { "key": "loanTerm", "value": "12" },
+                { "key": "houseStreet", "value": "10 Business Ave" },
+                { "key": "barangay", "value": "San Gabriel" },
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soDennis}}" }
               ]
             }
           },
@@ -299,32 +219,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "sme" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "50000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "purpose", "value": "Test decline" },
-                { "key": "businessName", "value": "Low Income Biz" },
-                { "key": "businessType", "value": "Service" },
-                { "key": "monthlyIncome", "value": "20000" },
                 { "key": "firstName", "value": "Low" },
-                { "key": "lastName", "value": "IncomeSME" },
-                { "key": "dateOfBirth", "value": "1988-06-10" },
+                { "key": "lastName", "value": "SME" },
+                { "key": "dob", "value": "1985-08-20" },
                 { "key": "civilStatus", "value": "Single" },
                 { "key": "mobile", "value": "09172000002" },
-                { "key": "email", "value": "sme.decline@test.com" },
+                { "key": "email", "value": "low.sme@test.com" },
+                { "key": "employmentStatus", "value": "Business Owner" },
+                { "key": "monthlyIncome", "value": "20000" },
+                { "key": "loanType", "value": "sme" },
+                { "key": "loanAmount", "value": "100000" },
+                { "key": "loanTerm", "value": "12" },
+                { "key": "houseStreet", "value": "11 Low St" },
                 { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "Test St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "Test St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" }
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soDennis}}" }
               ]
             }
           },
@@ -342,7 +253,7 @@
           ]
         },
         {
-          "name": "SME — Wrong field name (monthlyGrossRevenue instead of monthlyIncome)",
+          "name": "SME — Decline (₱400K amount, exceeds ₱300K max)",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit",
@@ -350,29 +261,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "sme" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "50000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "monthlyGrossRevenue", "value": "50000" },
-                { "key": "firstName", "value": "Wrong" },
-                { "key": "lastName", "value": "FieldSME" },
-                { "key": "dateOfBirth", "value": "1988-06-10" },
+                { "key": "firstName", "value": "Over" },
+                { "key": "lastName", "value": "SME" },
+                { "key": "dob", "value": "1985-08-20" },
                 { "key": "civilStatus", "value": "Single" },
                 { "key": "mobile", "value": "09172000003" },
-                { "key": "email", "value": "sme.wrongfield@test.com" },
+                { "key": "email", "value": "over.sme@test.com" },
+                { "key": "employmentStatus", "value": "Business Owner" },
+                { "key": "monthlyIncome", "value": "50000" },
+                { "key": "loanType", "value": "sme" },
+                { "key": "loanAmount", "value": "400000" },
+                { "key": "loanTerm", "value": "12" },
+                { "key": "houseStreet", "value": "12 Over St" },
                 { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "Test St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "Test St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" }
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soTroy}}" }
               ]
             }
           },
@@ -382,8 +287,8 @@
               "script": {
                 "exec": [
                   "const res = pm.response.json();",
-                  "pm.test('Declined — wrong field name proves backend ignores it', () => pm.expect(res.status).to.eql('declined'));",
-                  "pm.test('Reason mentions income', () => pm.expect(res.reasons.join(' ')).to.include('income'));"
+                  "pm.test('Status is declined', () => pm.expect(res.status).to.eql('declined'));",
+                  "pm.test('Reason mentions amount', () => pm.expect(res.reasons.join(' ')).to.include('Loan amount'));"
                 ]
               }
             }
@@ -392,10 +297,10 @@
       ]
     },
     {
-      "name": "AKAP Loan",
+      "name": "3 — AKAP Loan",
       "item": [
         {
-          "name": "AKAP — Valid (₱20K income, ₱10K amount)",
+          "name": "AKAP — Valid (₱20K income, ₱10K amount) → Troy",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit",
@@ -403,42 +308,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "akap" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "10000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "purpose", "value": "Working capital" },
-                { "key": "businessName", "value": "Sari-Sari Store" },
-                { "key": "businessType", "value": "Retail" },
-                { "key": "dtiNumber", "value": "DTI-99999" },
-                { "key": "dateEstablished", "value": "2021-06-01" },
-                { "key": "businessStreet", "value": "50 Market St" },
-                { "key": "businessBarangay", "value": "Sta. Isabel" },
-                { "key": "businessCity", "value": "Malolos" },
-                { "key": "businessProvince", "value": "Bulacan" },
-                { "key": "businessZip", "value": "3000" },
-                { "key": "monthlyIncome", "value": "20000" },
                 { "key": "firstName", "value": "Rosa" },
-                { "key": "middleName", "value": "Lim" },
-                { "key": "lastName", "value": "TestAKAP" },
-                { "key": "dateOfBirth", "value": "1992-08-10" },
+                { "key": "lastName", "value": "Aquino" },
+                { "key": "dob", "value": "1992-11-03" },
                 { "key": "civilStatus", "value": "Single" },
-                { "key": "employmentStatus", "value": "Owner" },
                 { "key": "mobile", "value": "09173000001" },
-                { "key": "email", "value": "akap.valid@test.com" },
-                { "key": "tin", "value": "111-222-333" },
-                { "key": "presentHouseStreet", "value": "75 Sampaguita St" },
+                { "key": "email", "value": "rosa.akap@test.com" },
+                { "key": "employmentStatus", "value": "Employee" },
+                { "key": "monthlyIncome", "value": "20000" },
+                { "key": "loanType", "value": "akap" },
+                { "key": "loanAmount", "value": "10000" },
+                { "key": "loanTerm", "value": "3" },
+                { "key": "houseStreet", "value": "20 Akap St" },
                 { "key": "barangay", "value": "Catmon" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "3 years" },
-                { "key": "permanentHouseStreet", "value": "75 Sampaguita St" },
-                { "key": "permanentBarangay", "value": "Catmon" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "3 years" }
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soTroy}}" }
               ]
             }
           },
@@ -464,30 +350,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "akap" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "5000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "monthlyIncome", "value": "5000" },
                 { "key": "firstName", "value": "Low" },
-                { "key": "lastName", "value": "IncomeAKAP" },
-                { "key": "dateOfBirth", "value": "1993-01-01" },
+                { "key": "lastName", "value": "Akap" },
+                { "key": "dob", "value": "1992-11-03" },
                 { "key": "civilStatus", "value": "Single" },
-                { "key": "employmentStatus", "value": "Owner" },
                 { "key": "mobile", "value": "09173000002" },
-                { "key": "email", "value": "akap.decline@test.com" },
+                { "key": "email", "value": "low.akap@test.com" },
+                { "key": "employmentStatus", "value": "Employee" },
+                { "key": "monthlyIncome", "value": "5000" },
+                { "key": "loanType", "value": "akap" },
+                { "key": "loanAmount", "value": "10000" },
+                { "key": "loanTerm", "value": "3" },
+                { "key": "houseStreet", "value": "21 Low St" },
                 { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "Test St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "Test St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" }
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soDennis}}" }
               ]
             }
           },
@@ -505,7 +384,7 @@
           ]
         },
         {
-          "name": "AKAP — Wrong field (monthlyGrossRevenue instead of monthlyIncome)",
+          "name": "AKAP — Decline (₱50K amount, exceeds ₱40K max)",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit",
@@ -513,30 +392,23 @@
             "body": {
               "mode": "formdata",
               "formdata": [
-                { "key": "loanType", "value": "akap" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "10000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "monthlyGrossRevenue", "value": "20000" },
-                { "key": "firstName", "value": "Wrong" },
-                { "key": "lastName", "value": "FieldAKAP" },
-                { "key": "dateOfBirth", "value": "1993-01-01" },
+                { "key": "firstName", "value": "Over" },
+                { "key": "lastName", "value": "Akap" },
+                { "key": "dob", "value": "1992-11-03" },
                 { "key": "civilStatus", "value": "Single" },
-                { "key": "employmentStatus", "value": "Owner" },
                 { "key": "mobile", "value": "09173000003" },
-                { "key": "email", "value": "akap.wrongfield@test.com" },
+                { "key": "email", "value": "over.akap@test.com" },
+                { "key": "employmentStatus", "value": "Employee" },
+                { "key": "monthlyIncome", "value": "20000" },
+                { "key": "loanType", "value": "akap" },
+                { "key": "loanAmount", "value": "50000" },
+                { "key": "loanTerm", "value": "3" },
+                { "key": "houseStreet", "value": "22 Over St" },
                 { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "Test St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "Test St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" }
+                { "key": "city", "value": "Malolos" },
+                { "key": "province", "value": "Bulacan" },
+                { "key": "zip", "value": "3000" },
+                { "key": "salesOfficerId", "value": "{{soTroy}}" }
               ]
             }
           },
@@ -546,8 +418,8 @@
               "script": {
                 "exec": [
                   "const res = pm.response.json();",
-                  "pm.test('Declined — wrong field name', () => pm.expect(res.status).to.eql('declined'));",
-                  "pm.test('Reason mentions income', () => pm.expect(res.reasons.join(' ')).to.include('income'));"
+                  "pm.test('Status is declined', () => pm.expect(res.status).to.eql('declined'));",
+                  "pm.test('Reason mentions amount', () => pm.expect(res.reasons.join(' ')).to.include('Loan amount'));"
                 ]
               }
             }
@@ -556,24 +428,19 @@
       ]
     },
     {
-      "name": "Group Loan",
+      "name": "4 — Group Loan",
       "item": [
         {
-          "name": "Group — Valid (leader + 3 members, ₱20K income each)",
+          "name": "Group — Valid (5 members, ₱40K amount) → Dennis",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit-group",
-            "header": [],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
             "body": {
-              "mode": "formdata",
-              "formdata": [
-                { "key": "loanType", "value": "group" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "groupName", "value": "Test Group Alpha" },
-                { "key": "totalLoanAmount", "value": "40000" },
-                { "key": "loanTerm", "value": "6" },
-                { "key": "members", "value": "[{\"firstName\":\"Leader\",\"lastName\":\"TestGroup\",\"dateOfBirth\":\"1988-01-15\",\"civilStatus\":\"Married\",\"mobile\":\"09174000001\",\"email\":\"leader@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"1 Leader St\",\"barangay\":\"Poblacion\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"One\",\"dateOfBirth\":\"1990-03-20\",\"civilStatus\":\"Single\",\"mobile\":\"09174000002\",\"email\":\"m1@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"2 Member St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"Two\",\"dateOfBirth\":\"1991-07-10\",\"civilStatus\":\"Single\",\"mobile\":\"09174000003\",\"email\":\"m2@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"3 Member St\",\"barangay\":\"Catmon\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"Three\",\"dateOfBirth\":\"1989-11-25\",\"civilStatus\":\"Married\",\"mobile\":\"09174000004\",\"email\":\"m3@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"4 Member St\",\"barangay\":\"Ligas\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"Four\",\"dateOfBirth\":\"1992-05-12\",\"civilStatus\":\"Single\",\"mobile\":\"09174000009\",\"email\":\"m4@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"5 Member St\",\"barangay\":\"Tikay\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]" }
-              ]
+              "mode": "raw",
+              "raw": "{\"loanType\":\"group\",\"salesOfficerId\":\"{{soDennis}}\",\"groupName\":\"Barangay Poblacion Group\",\"totalLoanAmount\":\"40000\",\"loanTerm\":\"6\",\"members\":[{\"firstName\":\"Maria\",\"lastName\":\"Santos\",\"dateOfBirth\":\"1988-01-15\",\"civilStatus\":\"Married\",\"mobile\":\"09174000001\",\"email\":\"maria@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"1 Leader St\",\"barangay\":\"Poblacion\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Jose\",\"lastName\":\"Reyes\",\"dateOfBirth\":\"1990-03-20\",\"civilStatus\":\"Single\",\"mobile\":\"09174000002\",\"email\":\"jose@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"18000\",\"houseStreet\":\"2 Main St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Ana\",\"lastName\":\"Cruz\",\"dateOfBirth\":\"1991-07-10\",\"civilStatus\":\"Single\",\"mobile\":\"09174000003\",\"email\":\"ana@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"17000\",\"houseStreet\":\"3 Rizal St\",\"barangay\":\"Catmon\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Pedro\",\"lastName\":\"Garcia\",\"dateOfBirth\":\"1989-11-25\",\"civilStatus\":\"Married\",\"mobile\":\"09174000004\",\"email\":\"pedro@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"19000\",\"houseStreet\":\"4 Mabini St\",\"barangay\":\"Ligas\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Rosa\",\"lastName\":\"Lim\",\"dateOfBirth\":\"1992-05-12\",\"civilStatus\":\"Single\",\"mobile\":\"09174000005\",\"email\":\"rosa@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"16000\",\"houseStreet\":\"5 Bonifacio St\",\"barangay\":\"Tikay\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]}"
             }
           },
           "event": [
@@ -594,17 +461,12 @@
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit-group",
-            "header": [],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
             "body": {
-              "mode": "formdata",
-              "formdata": [
-                { "key": "loanType", "value": "group" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "groupName", "value": "Too Small Group" },
-                { "key": "totalLoanAmount", "value": "20000" },
-                { "key": "loanTerm", "value": "3" },
-                { "key": "members", "value": "[{\"firstName\":\"Leader\",\"lastName\":\"Small\",\"dateOfBirth\":\"1988-01-15\",\"civilStatus\":\"Single\",\"mobile\":\"09174000005\",\"email\":\"smallleader@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"1 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"One\",\"dateOfBirth\":\"1990-03-20\",\"civilStatus\":\"Single\",\"mobile\":\"09174000006\",\"email\":\"sm1@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"2 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"Two\",\"dateOfBirth\":\"1991-07-10\",\"civilStatus\":\"Single\",\"mobile\":\"09174000007\",\"email\":\"sm2@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"3 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]" }
-              ]
+              "mode": "raw",
+              "raw": "{\"loanType\":\"group\",\"salesOfficerId\":\"{{soTroy}}\",\"groupName\":\"Too Small Group\",\"totalLoanAmount\":\"20000\",\"loanTerm\":\"3\",\"members\":[{\"firstName\":\"Leader\",\"lastName\":\"Small\",\"dateOfBirth\":\"1988-01-15\",\"civilStatus\":\"Single\",\"mobile\":\"09174000006\",\"email\":\"small1@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"1 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"One\",\"dateOfBirth\":\"1990-03-20\",\"civilStatus\":\"Single\",\"mobile\":\"09174000007\",\"email\":\"small2@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"2 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Member\",\"lastName\":\"Two\",\"dateOfBirth\":\"1991-07-10\",\"civilStatus\":\"Single\",\"mobile\":\"09174000008\",\"email\":\"small3@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"3 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]}"
             }
           },
           "event": [
@@ -619,28 +481,49 @@
               }
             }
           ]
+        },
+        {
+          "name": "Group — Decline (₱60K amount, exceeds ₱50K max)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/application/submit-group",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"loanType\":\"group\",\"salesOfficerId\":\"{{soDennis}}\",\"groupName\":\"Over Limit Group\",\"totalLoanAmount\":\"60000\",\"loanTerm\":\"6\",\"members\":[{\"firstName\":\"Over\",\"lastName\":\"Leader\",\"dateOfBirth\":\"1988-01-15\",\"civilStatus\":\"Single\",\"mobile\":\"09174000009\",\"email\":\"over1@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"1 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Over\",\"lastName\":\"M1\",\"dateOfBirth\":\"1990-03-20\",\"civilStatus\":\"Single\",\"mobile\":\"09174000010\",\"email\":\"over2@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"2 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Over\",\"lastName\":\"M2\",\"dateOfBirth\":\"1991-07-10\",\"civilStatus\":\"Single\",\"mobile\":\"09174000011\",\"email\":\"over3@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"3 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Over\",\"lastName\":\"M3\",\"dateOfBirth\":\"1989-11-25\",\"civilStatus\":\"Single\",\"mobile\":\"09174000012\",\"email\":\"over4@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"4 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Over\",\"lastName\":\"M4\",\"dateOfBirth\":\"1992-05-12\",\"civilStatus\":\"Single\",\"mobile\":\"09174000013\",\"email\":\"over5@test.com\",\"employmentStatus\":\"Employee\",\"monthlyIncome\":\"20000\",\"houseStreet\":\"5 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Status is declined', () => pm.expect(res.status).to.eql('declined'));",
+                  "pm.test('Reason mentions amount', () => pm.expect(res.reasons.join(' ')).to.include('Loan amount'));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "name": "SBL Loan",
+      "name": "5 — SBL Loan",
       "item": [
         {
-          "name": "SBL — Valid (₱15K income, ₱20K amount)",
+          "name": "SBL — Valid (₱20K amount, 4 members) → Troy",
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit-group",
-            "header": [],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
             "body": {
-              "mode": "formdata",
-              "formdata": [
-                { "key": "loanType", "value": "sbl" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "groupName", "value": "Brgy San Jose Officials" },
-                { "key": "totalLoanAmount", "value": "20000" },
-                { "key": "loanTerm", "value": "6" },
-                { "key": "members", "value": "[{\"firstName\":\"Kap\",\"lastName\":\"TestSBL\",\"dateOfBirth\":\"1980-05-01\",\"civilStatus\":\"Married\",\"mobile\":\"09175000001\",\"email\":\"sbl.leader@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"1 Brgy Hall\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Kagawad\",\"lastName\":\"One\",\"dateOfBirth\":\"1985-09-10\",\"civilStatus\":\"Single\",\"mobile\":\"09175000002\",\"email\":\"sbl.m1@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"2 Brgy St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Kagawad\",\"lastName\":\"Two\",\"dateOfBirth\":\"1987-12-20\",\"civilStatus\":\"Married\",\"mobile\":\"09175000003\",\"email\":\"sbl.m2@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"3 Brgy St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Kagawad\",\"lastName\":\"Three\",\"dateOfBirth\":\"1982-04-15\",\"civilStatus\":\"Married\",\"mobile\":\"09175000004\",\"email\":\"sbl.m3@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"4 Brgy St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]" }
-              ]
+              "mode": "raw",
+              "raw": "{\"loanType\":\"sbl\",\"salesOfficerId\":\"{{soTroy}}\",\"groupName\":\"Brgy San Jose Officials\",\"totalLoanAmount\":\"20000\",\"loanTerm\":\"6\",\"members\":[{\"firstName\":\"Kap\",\"lastName\":\"TestSBL\",\"dateOfBirth\":\"1980-05-01\",\"civilStatus\":\"Married\",\"mobile\":\"09175000001\",\"email\":\"sbl.leader@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"1 Brgy Hall\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Kagawad\",\"lastName\":\"One\",\"dateOfBirth\":\"1985-09-10\",\"civilStatus\":\"Single\",\"mobile\":\"09175000002\",\"email\":\"sbl.m1@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"2 Brgy St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Kagawad\",\"lastName\":\"Two\",\"dateOfBirth\":\"1987-12-20\",\"civilStatus\":\"Married\",\"mobile\":\"09175000003\",\"email\":\"sbl.m2@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"3 Brgy St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"},{\"firstName\":\"Kagawad\",\"lastName\":\"Three\",\"dateOfBirth\":\"1982-04-15\",\"civilStatus\":\"Married\",\"mobile\":\"09175000004\",\"email\":\"sbl.m3@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"4 Brgy St\",\"barangay\":\"San Jose\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]}"
             }
           },
           "event": [
@@ -661,17 +544,12 @@
           "request": {
             "method": "POST",
             "url": "{{baseUrl}}/api/application/submit-group",
-            "header": [],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
             "body": {
-              "mode": "formdata",
-              "formdata": [
-                { "key": "loanType", "value": "sbl" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "groupName", "value": "Over Limit SBL" },
-                { "key": "totalLoanAmount", "value": "200000" },
-                { "key": "loanTerm", "value": "6" },
-                { "key": "members", "value": "[{\"firstName\":\"Over\",\"lastName\":\"LimitSBL\",\"dateOfBirth\":\"1980-05-01\",\"civilStatus\":\"Single\",\"mobile\":\"09175000005\",\"email\":\"sbl.over@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"1 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]" }
-              ]
+              "mode": "raw",
+              "raw": "{\"loanType\":\"sbl\",\"salesOfficerId\":\"{{soDennis}}\",\"groupName\":\"Over Limit SBL\",\"totalLoanAmount\":\"200000\",\"loanTerm\":\"6\",\"members\":[{\"firstName\":\"Over\",\"lastName\":\"LimitSBL\",\"dateOfBirth\":\"1980-05-01\",\"civilStatus\":\"Single\",\"mobile\":\"09175000005\",\"email\":\"sbl.over@test.com\",\"employmentStatus\":\"Government Employee\",\"monthlyIncome\":\"15000\",\"houseStreet\":\"1 St\",\"barangay\":\"Test\",\"city\":\"Malolos\",\"province\":\"Bulacan\",\"zip\":\"3000\"}]}"
             }
           },
           "event": [
@@ -682,132 +560,6 @@
                   "const res = pm.response.json();",
                   "pm.test('Status is declined', () => pm.expect(res.status).to.eql('declined'));",
                   "pm.test('Reason mentions amount', () => pm.expect(res.reasons.join(' ')).to.include('Loan amount'));"
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "Field Mapping Regression",
-      "item": [
-        {
-          "name": "Regression — monthly_income (snake_case) should fail",
-          "request": {
-            "method": "POST",
-            "url": "{{baseUrl}}/api/application/submit",
-            "header": [],
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                { "key": "loanType", "value": "personal" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loanAmount", "value": "15000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "monthly_income", "value": "25000" },
-                { "key": "firstName", "value": "Snake" },
-                { "key": "lastName", "value": "CaseTest" },
-                { "key": "dateOfBirth", "value": "1990-05-15" },
-                { "key": "civilStatus", "value": "Single" },
-                { "key": "mobile", "value": "09176000001" },
-                { "key": "email", "value": "snake.case@test.com" },
-                { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "Test St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "Test St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" },
-                { "key": "employmentStatus", "value": "Employee" },
-                { "key": "employerName", "value": "Test" },
-                { "key": "lengthOfEmployment", "value": "1 year" },
-                { "key": "refAName", "value": "A" },
-                { "key": "refARelationship", "value": "Friend" },
-                { "key": "refAContact", "value": "09176000010" },
-                { "key": "refBName", "value": "B" },
-                { "key": "refBRelationship", "value": "Friend" },
-                { "key": "refBContact", "value": "09176000011" },
-                { "key": "refCName", "value": "C" },
-                { "key": "refCRelationship", "value": "Friend" },
-                { "key": "refCContact", "value": "09176000012" }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const res = pm.response.json();",
-                  "pm.test('Declined — snake_case field ignored by backend', () => pm.expect(res.status).to.eql('declined'));",
-                  "pm.test('Reason mentions income', () => pm.expect(res.reasons.join(' ')).to.include('income'));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Regression — loan_amount (snake_case) should fail",
-          "request": {
-            "method": "POST",
-            "url": "{{baseUrl}}/api/application/submit",
-            "header": [],
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                { "key": "loanType", "value": "personal" },
-                { "key": "salesOfficerId", "value": "{{soId}}" },
-                { "key": "loan_amount", "value": "15000" },
-                { "key": "paymentTerm", "value": "3" },
-                { "key": "monthlyIncome", "value": "25000" },
-                { "key": "firstName", "value": "Snake" },
-                { "key": "lastName", "value": "AmountTest" },
-                { "key": "dateOfBirth", "value": "1990-05-15" },
-                { "key": "civilStatus", "value": "Single" },
-                { "key": "mobile", "value": "09176000002" },
-                { "key": "email", "value": "snake.amount@test.com" },
-                { "key": "barangay", "value": "Test" },
-                { "key": "presentHouseStreet", "value": "Test St" },
-                { "key": "presentCity", "value": "Malolos" },
-                { "key": "presentProvince", "value": "Bulacan" },
-                { "key": "presentZip", "value": "3000" },
-                { "key": "presentLengthOfStay", "value": "1 year" },
-                { "key": "permanentHouseStreet", "value": "Test St" },
-                { "key": "permanentBarangay", "value": "Test" },
-                { "key": "permanentCity", "value": "Malolos" },
-                { "key": "permanentProvince", "value": "Bulacan" },
-                { "key": "permanentZip", "value": "3000" },
-                { "key": "permanentLengthOfStay", "value": "1 year" },
-                { "key": "employmentStatus", "value": "Employee" },
-                { "key": "employerName", "value": "Test" },
-                { "key": "lengthOfEmployment", "value": "1 year" },
-                { "key": "refAName", "value": "A" },
-                { "key": "refARelationship", "value": "Friend" },
-                { "key": "refAContact", "value": "09176000020" },
-                { "key": "refBName", "value": "B" },
-                { "key": "refBRelationship", "value": "Friend" },
-                { "key": "refBContact", "value": "09176000021" },
-                { "key": "refCName", "value": "C" },
-                { "key": "refCRelationship", "value": "Friend" },
-                { "key": "refCContact", "value": "09176000022" }
-              ]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const res = pm.response.json();",
-                  "pm.test('Declined or error — snake_case amount ignored', () => {",
-                  "  pm.expect(['declined', 'error']).to.include(res.status);",
-                  "});"
                 ]
               }
             }
