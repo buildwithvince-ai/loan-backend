@@ -51,7 +51,7 @@ function detectProductId(mobile) {
     '936','937','955','956','965','966','967','975','976','977','978',
     '979','995','996','997']
 
-  const ditoPrefixes = ['895','896','897','898','991','992','993']
+  const ditoPrefixes = ['895','896','897','898','991','992']
 
   if (ditoPrefixes.some(p => prefix.startsWith(p.slice(0,3)))) return 'DT1;'
   if (globePrefixes.some(p => prefix === p)) return 'GL1;'
