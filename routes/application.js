@@ -442,6 +442,32 @@ router.post('/test-finscore', async (req, res) => {
 })
 
 // ---------------------------------------------------------------------------
+// Delete test applications by phone prefix
+// DELETE /api/application/test-cleanup?prefix=0917
+// ---------------------------------------------------------------------------
+router.delete('/test-cleanup', async (req, res) => {
+  try {
+    const prefix = req.query.prefix;
+    if (!prefix || !prefix.startsWith('0917')) {
+      return res.status(400).json({ status: 'error', message: 'prefix query param required (must start with 0917)' });
+    }
+
+    const { data, error } = await supabase
+      .from('applications')
+      .delete()
+      .like('phone', `${prefix}%`)
+      .select('id');
+
+    if (error) throw error;
+
+    return res.json({ status: 'success', deleted: data ? data.length : 0 });
+  } catch (error) {
+    console.error('Test cleanup error:', error.message);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Test email automation
 // POST /api/application/test-email
 // Body: { to, template }

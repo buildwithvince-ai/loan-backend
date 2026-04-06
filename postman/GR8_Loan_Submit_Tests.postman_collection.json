@@ -10,6 +10,30 @@
   ],
   "item": [
     {
+      "name": "Cleanup Test Data",
+      "item": [
+        {
+          "name": "Delete test apps (0917 prefix)",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/application/test-cleanup?prefix=0917"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Cleanup succeeded', () => pm.expect(res.status).to.eql('success'));",
+                  "console.log('Deleted ' + res.deleted + ' test applications');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Personal Loan",
       "item": [
         {
