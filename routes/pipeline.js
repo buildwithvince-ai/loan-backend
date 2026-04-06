@@ -147,4 +147,48 @@ router.post(
   }
 );
 
+// ---------------------------------------------------------------------------
+// GET /:id/files
+// Return signed URLs for all uploaded files on an application.
+// URLs expire after 1 hour.
+// ---------------------------------------------------------------------------
+router.get('/:id/files', async (req, res) => {
+  try {
+    const { data: app, error } = await supabase
+      .from('applications')
+      .select('file_metadata')
+      .eq('id', req.params.id)
+      .single();
+
+    if (error || !app) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    const files = app.file_metadata || [];
+
+    if (files.length === 0) {
+      return res.json([]);
+    }
+
+    const signed = await Promise.all(
+      files.map(async (file) => {
+        const { data, error: signError } = await supabase.storage
+          .from('application-files')
+          .createSignedUrl(file.storage_path, 3600);
+
+        return {
+          name: file.original_name,
+          field: file.fieldname || null,
+          url: signError ? null : data.signedUrl,
+        };
+      })
+    );
+
+    return res.json(signed);
+  } catch (error) {
+    console.error('[pipeline] files error:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
