@@ -39,23 +39,25 @@ function convertMobile(mobile) {
 
 function detectProductId(mobile) {
   // Detect telco from prefix
+  // Source: https://github.com/0xbitx/PH_Mobile_Number_Prefixes
   const converted = mobile.startsWith('09') ? '63' + mobile.slice(1) : mobile
   const prefix = converted.slice(2, 5) // get 3-digit prefix after 63
 
-  const smartPrefixes = ['908','911','912','913','914','915','916','917',
-    '918','919','920','921','928','929','930','938','939','940','946',
-    '947','948','949','950','951','961','963','964','965','967','973',
-    '974','975','989','992','993','994','995','996','997','998','999']
+  // DITO checked first — some prefixes overlap with Smart
+  const ditoPrefixes = ['895','896','897','898','991','992','993','994']
 
-  const globePrefixes = ['905','906','915','916','917','926','927','935',
-    '936','937','955','956','965','966','967','975','976','977','978',
-    '979','995','996','997']
+  // Globe Telecom (including TM)
+  const globePrefixes = ['817','905','906','915','916','917','926','927',
+    '935','936','945','955','956','965','966','967','975','976','977',
+    '995','997']
 
-  const ditoPrefixes = ['895','896','897','898','991','992']
+  // Smart (including TNT) + Sun Cellular — all use Q1
+  // Smart: 811-813, 907-914, 918-921, 928-930, 938-940, 946-951, 961, 963, 968-970, 981, 989, 998-999
+  // Sun: 922-925, 931-934, 941-944
 
-  if (ditoPrefixes.some(p => prefix.startsWith(p.slice(0,3)))) return 'DT1;'
+  if (ditoPrefixes.some(p => prefix === p)) return 'DT1;'
   if (globePrefixes.some(p => prefix === p)) return 'GL1;'
-  return 'Q1;' // default to SMART
+  return 'Q1;' // default to Smart/Sun
 }
 
 async function getScore(mobileNumber) {
