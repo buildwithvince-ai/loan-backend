@@ -224,7 +224,7 @@ router.post('/submit', upload.any(), async (req, res) => {
 
     if (error) throw error
 
-    // Email notification — non-blocking, errors won't fail the response
+    // Email notification — errors won't fail the response
     try {
       const appRecord = { reference_id, full_name: formData.firstName + ' ' + formData.lastName, loan_type: formData.loanType, loan_amount: formData.loanAmount, phone: formData.mobile };
       if (assigned_sales_officer) {
@@ -235,13 +235,9 @@ router.post('/submit', upload.any(), async (req, res) => {
           .single();
         if (soUser) {
           await notifySalesOfficer(soUser, appRecord);
-          console.log('[submit] SO email sent to', soUser.email);
-        } else {
-          console.log('[submit] SO user not found for id:', assigned_sales_officer);
         }
       } else {
         await notifyTeamByRole('sales_officer', appRecord, { message: 'Unassigned lead needs pickup' });
-        console.log('[submit] Team email sent to all sales officers');
       }
     } catch (hookErr) {
       console.error('[submit] Email hook error:', hookErr.message);
