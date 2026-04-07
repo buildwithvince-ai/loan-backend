@@ -56,7 +56,7 @@ router.get('/applications/phone/:phone', async (req, res) => {
 })
 
 // Submit CI score and calculate final score + tier
-router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin'), async (req, res) => {
+router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', 'ci_officer'), async (req, res) => {
   try {
     const {
       ci_score, notes, reviewed_by,
@@ -105,6 +105,16 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin'), 
       .single()
 
     if (error) throw error
+
+    // Auto-transition from ci_officer to approver
+    try {
+      const { transitionStage } = require('../services/pipeline')
+      await transitionStage(req.params.id, 'approver', req.user, {})
+    } catch (transErr) {
+      console.error('[admin] Auto-transition to approver failed:', transErr.message)
+      // Non-fatal — CI score is already saved
+    }
+
     return res.json(data)
   } catch (error) {
     console.error('CI score error:', error.message)

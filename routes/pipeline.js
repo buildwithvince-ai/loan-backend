@@ -176,10 +176,13 @@ router.get('/:id/files', async (req, res) => {
           .from('application-files')
           .createSignedUrl(file.storage_path, 3600);
 
+        if (signError) {
+          console.error('[pipeline] signedUrl error for', file.storage_path, signError.message);
+        }
         return {
           name: file.original_name,
-          field: file.fieldname || null,
-          url: signError ? null : data.signedUrl,
+          field: file.field_name || null,
+          url: signError ? null : data?.signedUrl || null,
         };
       })
     );

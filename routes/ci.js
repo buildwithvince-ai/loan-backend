@@ -90,6 +90,15 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
 
     if (updateError) throw updateError
 
+    // Auto-transition from ci_officer to approver
+    try {
+      const { transitionStage } = require('../services/pipeline')
+      await transitionStage(req.params.id, 'approver', req.user, {})
+    } catch (transErr) {
+      console.error('[ci] Auto-transition to approver failed:', transErr.message)
+      // Non-fatal — CI score is already saved
+    }
+
     // Return limited fields only
     const { data, error } = await supabase
       .from('applications')
