@@ -3,7 +3,7 @@ const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
 
-const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer'
+const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage'
 
 router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin'))
 
@@ -60,8 +60,9 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
     if (fetchError) throw fetchError
 
     const ci_normalized = Math.round((ci_score / 50) * 100)
+    const finNorm = app.finscore_normalized || 0
     const final_score = Math.round(
-      ((app.finscore_normalized * 0.50) + (ci_normalized * 0.50)) * 10
+      ((finNorm * 0.50) + (ci_normalized * 0.50)) * 10
     ) / 10
 
     let tier

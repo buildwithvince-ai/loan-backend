@@ -74,8 +74,9 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin'), 
 
     // Normalize CI from 0-50 scale to 0-100
     const ci_normalized = Math.round((ci_score / 50) * 100)
+    const finNorm = app.finscore_normalized || 0
     const final_score = Math.round(
-      ((app.finscore_normalized * 0.50) + (ci_normalized * 0.50)) * 10
+      ((finNorm * 0.50) + (ci_normalized * 0.50)) * 10
     ) / 10
 
     let tier
