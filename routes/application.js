@@ -407,17 +407,22 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     const consent_agreed = req.body.consentAgreed === 'true' || req.body.consentAgreed === true
     const consent_agreed_at = new Date().toISOString()
 
-    const { error } = await supabase
-      .from('applications')
-      .insert({
-        reference_id,
-        phone: leader.mobile,
+    // Build one row per member — leader gets base ref, co-members get suffixed refs
+    const base_reference_id = reference_id
+    const groupMeta = { loanType, totalLoanAmount, loanTerm, groupName, base_reference_id, total_members: members.length }
+
+    const rows = members.map((member, i) => {
+      const isLeader = i === 0
+      const memberRef = isLeader ? base_reference_id : `${base_reference_id}-M${i}`
+      return {
+        reference_id: memberRef,
+        phone: member.mobile,
         loan_type: loanType,
-        full_name: leader.firstName + ' ' + leader.lastName,
-        email: leader.email || '',
+        full_name: (member.firstName || '') + ' ' + (member.lastName || ''),
+        email: member.email || '',
         loan_amount: totalLoanAmount,
         loan_term: loanTerm,
-        form_data: { loanType, totalLoanAmount, loanTerm, groupName },
+        form_data: { ...groupMeta, member_index: i, is_leader: isLeader, ...member },
         finscore_raw,
         finscore_normalized,
         status: 'pending',
@@ -427,15 +432,20 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         group_members: members,
         consent_agreed,
         consent_agreed_at,
-        prior_decline_flag,
-        prior_decline_reference
-      })
+        prior_decline_flag: isLeader ? prior_decline_flag : false,
+        prior_decline_reference: isLeader ? prior_decline_reference : null
+      }
+    })
+
+    const { error } = await supabase
+      .from('applications')
+      .insert(rows)
 
     if (error) throw error
 
-    // Email notification — non-blocking, errors won't fail the response
+    // Email notification — errors won't fail the response
     try {
-      const appRecord = { reference_id, full_name: leader.firstName + ' ' + leader.lastName, loan_type: loanType, loan_amount: totalLoanAmount, phone: leader.mobile };
+      const appRecord = { reference_id: base_reference_id, full_name: leader.firstName + ' ' + leader.lastName, loan_type: loanType, loan_amount: totalLoanAmount, phone: leader.mobile };
       if (assigned_sales_officer) {
         const { data: soUser } = await supabase
           .from('admin_users')
@@ -444,13 +454,9 @@ router.post('/submit-group', upload.any(), async (req, res) => {
           .single();
         if (soUser) {
           await notifySalesOfficer(soUser, appRecord);
-          console.log('[submit-group] SO email sent to', soUser.email);
-        } else {
-          console.log('[submit-group] SO user not found for id:', assigned_sales_officer);
         }
       } else {
         await notifyTeamByRole('sales_officer', appRecord, { message: 'Unassigned lead needs pickup' });
-        console.log('[submit-group] Team email sent to all sales officers');
       }
     } catch (hookErr) {
       console.error('[submit-group] Email hook error:', hookErr.message);
@@ -458,7 +464,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
 
     return res.status(200).json({
       status: 'success',
-      referenceId: reference_id,
+      referenceId: base_reference_id,
       totalMembers: members.length
     })
 
