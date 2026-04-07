@@ -5,6 +5,7 @@ const upload = multer({ storage: multer.memoryStorage() })
 const { createBorrower, uploadAllFiles } = require('../services/loandisk')
 const { supabase } = require('../services/supabase')
 const { compressFiles } = require('../services/compress')
+const { notifySalesOfficer, notifyTeamByRole } = require('../services/email')
 
 // Pre-qualification check
 function preQualify(formData) {
@@ -223,6 +224,27 @@ router.post('/submit', upload.any(), async (req, res) => {
 
     if (error) throw error
 
+    // Fire-and-forget email notification
+    (async () => {
+      try {
+        const appRecord = { reference_id, full_name: formData.firstName + ' ' + formData.lastName, loan_type: formData.loanType, loan_amount: formData.loanAmount, phone: formData.mobile };
+        if (assigned_sales_officer) {
+          const { data: soUser } = await supabase
+            .from('admin_users')
+            .select('id, email, full_name, roles')
+            .eq('id', assigned_sales_officer)
+            .single();
+          if (soUser) {
+            notifySalesOfficer(soUser, appRecord);
+          }
+        } else {
+          notifyTeamByRole('sales_officer', appRecord, { message: 'Unassigned lead needs pickup' });
+        }
+      } catch (hookErr) {
+        console.error('[submit] Email hook error:', hookErr.message);
+      }
+    })();
+
     return res.status(200).json({
       status: 'success',
       referenceId: reference_id
@@ -412,6 +434,27 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       })
 
     if (error) throw error
+
+    // Fire-and-forget email notification
+    (async () => {
+      try {
+        const appRecord = { reference_id, full_name: leader.firstName + ' ' + leader.lastName, loan_type: loanType, loan_amount: totalLoanAmount, phone: leader.mobile };
+        if (assigned_sales_officer) {
+          const { data: soUser } = await supabase
+            .from('admin_users')
+            .select('id, email, full_name, roles')
+            .eq('id', assigned_sales_officer)
+            .single();
+          if (soUser) {
+            notifySalesOfficer(soUser, appRecord);
+          }
+        } else {
+          notifyTeamByRole('sales_officer', appRecord, { message: 'Unassigned lead needs pickup' });
+        }
+      } catch (hookErr) {
+        console.error('[submit-group] Email hook error:', hookErr.message);
+      }
+    })();
 
     return res.status(200).json({
       status: 'success',
