@@ -367,26 +367,25 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       return res.status(200).json({ status: 'declined', reasons: memberErrors })
     }
 
-    // FinScore for leader (first member)
+    // FinScore — score each member individually in parallel
     const { getScore } = require('../services/finscore')
-    let finScore = { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
-    try {
-      finScore = await getScore(leader.mobile)
-      console.log('[Group] Leader FinScore:', JSON.stringify(finScore))
-    } catch (err) {
-      console.error('[Group] Leader FinScore failed:', err.message)
-    }
-
-    if (finScore.phoneNotFound) {
-      return res.status(422).json({
-        status: 'phone_not_found',
-        message: 'The leader\'s mobile number could not be verified. Please check and try again.'
+    const memberScores = await Promise.all(
+      members.map(async (member, i) => {
+        try {
+          const result = await getScore(member.mobile)
+          console.log(`[Group] FinScore member ${i} (${member.mobile}):`, JSON.stringify(result))
+          if (result.phoneNotFound || result.noScore) {
+            return { finscore_raw: 0, finscore_normalized: 0 }
+          }
+          const raw = result.score || 0
+          const normalized = raw === 0 ? 0 : Math.round(((raw - 300) / (999 - 300)) * 100)
+          return { finscore_raw: raw, finscore_normalized: normalized }
+        } catch (err) {
+          console.error(`[Group] FinScore failed for member ${i} (${member.mobile}):`, err.message)
+          return { finscore_raw: 0, finscore_normalized: 0 }
+        }
       })
-    }
-
-    const finscore_raw = finScore.score || 0
-    const finscore_normalized = finscore_raw === 0 ? 0 :
-      Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
+    )
 
     const reference_id = 'GR8-' + Date.now()
     const folderName = `${reference_id}_${leader.firstName}-${leader.lastName}`
@@ -427,13 +426,14 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     const rows = members.map((member, i) => {
       const isLeader = i === 0
       const memberRef = isLeader ? base_reference_id : `${base_reference_id}-M${i}`
+      const { finscore_raw, finscore_normalized } = memberScores[i]
       return {
         reference_id: memberRef,
         phone: member.mobile,
         loan_type: loanType,
         full_name: (member.firstName || '') + ' ' + (member.lastName || ''),
         email: member.email || '',
-        loan_amount: totalLoanAmount,
+        loan_amount: member.loanAmount || totalLoanAmount,
         loan_term: loanTerm,
         form_data: { ...groupMeta, member_index: i, is_leader: isLeader, ...member },
         finscore_raw,
