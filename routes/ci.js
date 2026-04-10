@@ -61,7 +61,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
 
     const ci_normalized = Math.round((ci_score / 50) * 100)
     const finNorm = app.finscore_normalized || 0
-    const isReapplication = ci_form_data?.is_reapplication === true
+    const isReapplication = ci_form_data?.is_reapplication === true || ci_form_data?.is_reapplication === 'true'
     const reapplication_bonus = isReapplication ? 10 : 0
     const raw_score = Math.round(
       ((finNorm * 0.50) + (ci_normalized * 0.50)) * 10
