@@ -159,6 +159,13 @@ router.post('/submit', upload.any(), async (req, res) => {
     const finScore = await getScore(formData.mobile)
     console.log('FinScore result:', JSON.stringify(finScore))
 
+    if (finScore.phoneNotFound) {
+      return res.status(422).json({
+        status: 'phone_not_found',
+        message: 'The mobile number provided could not be verified. Please check and try again.'
+      })
+    }
+
     // Step 4 — Normalize FinScore
     const finscore_raw = finScore.score || 0
     const finscore_normalized = finscore_raw === 0 ? 0 :
@@ -369,6 +376,13 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       console.log('[Group] Leader FinScore:', JSON.stringify(finScore))
     } catch (err) {
       console.error('[Group] Leader FinScore failed:', err.message)
+    }
+
+    if (finScore.phoneNotFound) {
+      return res.status(422).json({
+        status: 'phone_not_found',
+        message: 'The leader\'s mobile number could not be verified. Please check and try again.'
+      })
     }
 
     const finscore_raw = finScore.score || 0

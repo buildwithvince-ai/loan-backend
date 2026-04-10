@@ -75,9 +75,12 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
     // Normalize CI from 0-50 scale to 0-100
     const ci_normalized = Math.round((ci_score / 50) * 100)
     const finNorm = app.finscore_normalized || 0
-    const final_score = Math.round(
+    const isReapplication = ci_form_data?.is_reapplication === true
+    const reapplication_bonus = isReapplication ? 10 : 0
+    const raw_score = Math.round(
       ((finNorm * 0.50) + (ci_normalized * 0.50)) * 10
     ) / 10
+    const final_score = Math.min(raw_score + reapplication_bonus, 100)
 
     let tier
     if (final_score >= 85) tier = 'approved'

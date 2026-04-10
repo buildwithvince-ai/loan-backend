@@ -109,8 +109,17 @@ async function getScore(mobileNumber) {
     }
 
   } catch (error) {
-    console.error('FinScore error:', error.response?.data || error.message)
-    // Return safe fallback — do not block application on FinScore failure
+    const status = error.response?.status
+    const errData = error.response?.data
+
+    // 4xx from FinScore = invalid or non-existent phone number
+    if (status >= 400 && status < 500) {
+      console.error('FinScore: phone not found or invalid —', status, errData)
+      return { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true, phoneNotFound: true }
+    }
+
+    console.error('FinScore error:', errData || error.message)
+    // Return safe fallback for network/server errors — do not block application
     return { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
   }
 }
