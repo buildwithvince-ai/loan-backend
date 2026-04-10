@@ -38,6 +38,49 @@ router.get('/applications/:id', async (req, res) => {
   }
 })
 
+// Get signed file URLs for an application
+router.get('/applications/:id/files', async (req, res) => {
+  try {
+    const { data: app, error } = await supabase
+      .from('applications')
+      .select('file_metadata')
+      .eq('id', req.params.id)
+      .single()
+
+    if (error || !app) {
+      return res.status(404).json({ error: 'Application not found' })
+    }
+
+    const files = app.file_metadata || []
+
+    if (files.length === 0) {
+      return res.json({ data: [] })
+    }
+
+    const signed = await Promise.all(
+      files.map(async (file) => {
+        const { data, error: signError } = await supabase.storage
+          .from('application-files')
+          .createSignedUrl(file.storage_path, 3600)
+
+        if (signError) {
+          console.error('[admin] signedUrl error for', file.storage_path, signError.message)
+        }
+        return {
+          name: file.original_name,
+          field: file.field_name || null,
+          url: signError ? null : data?.signedUrl || null
+        }
+      })
+    )
+
+    return res.json({ data: signed })
+  } catch (error) {
+    console.error('[admin] files error:', error.message)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 // Get application by phone number
 router.get('/applications/phone/:phone', async (req, res) => {
   try {
