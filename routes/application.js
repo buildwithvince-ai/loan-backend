@@ -220,7 +220,7 @@ router.post('/submit', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
-        stage: 'sales_officer',
+        stage: 'verifier',
         assigned_sales_officer,
         file_metadata,
         consent_agreed,
@@ -234,18 +234,7 @@ router.post('/submit', upload.any(), async (req, res) => {
     // Email notification — errors won't fail the response
     try {
       const appRecord = { reference_id, full_name: formData.firstName + ' ' + formData.lastName, loan_type: formData.loanType, loan_amount: formData.loanAmount, phone: formData.mobile };
-      if (assigned_sales_officer) {
-        const { data: soUser } = await supabase
-          .from('admin_users')
-          .select('id, email, full_name, roles')
-          .eq('id', assigned_sales_officer)
-          .single();
-        if (soUser) {
-          await notifySalesOfficer(soUser, appRecord);
-        }
-      } else {
-        await notifyTeamByRole('sales_officer', appRecord, { message: 'Unassigned lead needs pickup' });
-      }
+      await notifyTeamByRole('verifier', appRecord, { message: 'New application ready for verification' });
     } catch (hookErr) {
       console.error('[submit] Email hook error:', hookErr.message);
     }
@@ -439,7 +428,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         finscore_raw,
         finscore_normalized,
         status: 'pending',
-        stage: 'sales_officer',
+        stage: 'verifier',
         assigned_sales_officer,
         file_metadata,
         group_members: members,
@@ -459,18 +448,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     // Email notification — errors won't fail the response
     try {
       const appRecord = { reference_id: base_reference_id, full_name: leader.firstName + ' ' + leader.lastName, loan_type: loanType, loan_amount: totalLoanAmount, phone: leader.mobile };
-      if (assigned_sales_officer) {
-        const { data: soUser } = await supabase
-          .from('admin_users')
-          .select('id, email, full_name, roles')
-          .eq('id', assigned_sales_officer)
-          .single();
-        if (soUser) {
-          await notifySalesOfficer(soUser, appRecord);
-        }
-      } else {
-        await notifyTeamByRole('sales_officer', appRecord, { message: 'Unassigned lead needs pickup' });
-      }
+      await notifyTeamByRole('verifier', appRecord, { message: 'New application ready for verification' });
     } catch (hookErr) {
       console.error('[submit-group] Email hook error:', hookErr.message);
     }

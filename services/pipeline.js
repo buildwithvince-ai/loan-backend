@@ -131,6 +131,21 @@ const TRANSITION_GUARDS = {
     return { allowed: true, reason: 'Approved and pushed to Loandisk' };
   },
 
+  'sales_officer->approver': async (application, user, meta) => {
+    const permitted = ['sales_officer', 'admin', 'super_admin'];
+    const userRoles = user.roles || [];
+    if (!permitted.some((r) => userRoles.includes(r))) {
+      return { allowed: false, reason: 'Only sales officers or admins can submit an SO decision' };
+    }
+    if (!meta || !meta.so_decision) {
+      return { allowed: false, reason: 'so_decision is required (confirm or decline)' };
+    }
+    if (!['confirm', 'decline'].includes(meta.so_decision)) {
+      return { allowed: false, reason: 'so_decision must be confirm or decline' };
+    }
+    return { allowed: true, reason: 'SO decision submitted' };
+  },
+
   'verifier->sales_officer': async (application, user, meta) => {
     const permitted = ['verifier', 'admin', 'super_admin'];
     const userRoles = user.roles || [];
@@ -258,13 +273,25 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
 
   const updatedHistory = [...existingHistory, historyEntry];
 
+  // Build the update payload — conditionally include SO-related timestamps
+  const updatePayload = {
+    stage: toStage,
+    stage_history: updatedHistory
+  };
+
+  if (toStage === 'sales_officer' && (meta.so_confirmation_requested === true || meta.so_confirmation_requested === 'true')) {
+    updatePayload.so_confirmation_sent_at = new Date().toISOString();
+  }
+
+  if (toStage === 'approver' && meta.so_decision) {
+    updatePayload.so_decision = meta.so_decision;
+    updatePayload.so_decision_at = new Date().toISOString();
+  }
+
   // Write the new stage and history to the DB
   const { data: updated, error: updateError } = await supabase
     .from('applications')
-    .update({
-      stage: toStage,
-      stage_history: updatedHistory
-    })
+    .update(updatePayload)
     .eq('id', appId)
     .select()
     .single();
