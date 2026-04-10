@@ -331,23 +331,22 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       return res.status(200).json({ status: 'declined', reasons: ['SBL requires at least 1 member'] })
     }
 
-    // Validate total loan amount
-    const amount = parseFloat(totalLoanAmount) || 0
-    const limits = {
+    const perMemberLimits = {
       group: { min: 10000, max: 50000 },
       sbl: { min: 5000, max: 100000 }
-    }
-    const limit = limits[loanType]
-    if (limit && (amount < limit.min || amount > limit.max)) {
-      return res.status(200).json({
-        status: 'declined',
-        reasons: [`Loan amount must be between ₱${limit.min.toLocaleString()} and ₱${limit.max.toLocaleString()}`]
-      })
     }
 
     // Validate each member
     const memberErrors = []
     members.forEach((member, i) => {
+      // Per-member loan amount check
+      const memberLimit = perMemberLimits[loanType]
+      if (memberLimit) {
+        const memberAmount = parseFloat(member.loanAmount) || 0
+        if (memberAmount < memberLimit.min || memberAmount > memberLimit.max) {
+          memberErrors.push(`Member ${i + 1}: Loan amount must be between ₱${memberLimit.min.toLocaleString()} and ₱${memberLimit.max.toLocaleString()}`)
+        }
+      }
       // Age check
       if (member.dob) {
         const dob = new Date(member.dob)
