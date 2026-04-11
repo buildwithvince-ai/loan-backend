@@ -21,24 +21,7 @@ router.get('/applications', async (req, res) => {
   }
 })
 
-// Get single application by ID
-router.get('/applications/:id', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('applications')
-      .select('*')
-      .eq('id', req.params.id)
-      .single()
-
-    if (error) throw error
-    return res.json(data)
-  } catch (error) {
-    console.error('Admin get error:', error.message)
-    return res.status(500).json({ error: error.message })
-  }
-})
-
-// Get signed file URLs for an application
+// Get signed file URLs for an application — must be before /:id to avoid route capture
 router.get('/applications/:id/files', async (req, res) => {
   try {
     const { data: app, error } = await supabase
@@ -54,7 +37,7 @@ router.get('/applications/:id/files', async (req, res) => {
     const files = app.file_metadata || []
 
     if (files.length === 0) {
-      return res.json({ data: [] })
+      return res.json([])
     }
 
     const signed = await Promise.all(
@@ -67,16 +50,33 @@ router.get('/applications/:id/files', async (req, res) => {
           console.error('[admin] signedUrl error for', file.storage_path, signError.message)
         }
         return {
-          name: file.original_name,
           field: file.field_name || null,
+          name: file.original_name,
           url: signError ? null : data?.signedUrl || null
         }
       })
     )
 
-    return res.json({ data: signed })
+    return res.json(signed)
   } catch (error) {
     console.error('[admin] files error:', error.message)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+// Get single application by ID
+router.get('/applications/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('applications')
+      .select('*')
+      .eq('id', req.params.id)
+      .single()
+
+    if (error) throw error
+    return res.json(data)
+  } catch (error) {
+    console.error('Admin get error:', error.message)
     return res.status(500).json({ error: error.message })
   }
 })
