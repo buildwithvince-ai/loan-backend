@@ -400,6 +400,58 @@ async function notifyApproverSODecision(approverTeam, application, soDecision) {
 }
 
 // ---------------------------------------------------------------------------
+// sendProblemReport
+// ---------------------------------------------------------------------------
+
+async function sendProblemReport({ reported_by_name, reported_by_role, page, description, screenshot_url, timestamp }) {
+  try {
+    const ownerEmail = process.env.OWNER_EMAIL;
+    if (!ownerEmail) {
+      console.error('[email] sendProblemReport — OWNER_EMAIL not configured, skipping');
+      return;
+    }
+
+    const phTime = new Date(timestamp).toLocaleString('en-PH', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+
+    const subject = `[GR8 Bug Report] ${page} — ${phTime}`;
+
+    const screenshotBlock = screenshot_url
+      ? `<a href="${screenshot_url}" target="_blank" style="color:#1a3c6e;text-decoration:underline;">View Screenshot</a>`
+      : 'None attached';
+
+    const body = buildEmailWrapper(`
+      <p style="margin:0 0 16px;font-size:14px;color:#374151;">A problem has been reported by an internal user.</p>
+      <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Reported By:</strong> ${reported_by_name}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Role:</strong> ${reported_by_role}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Page:</strong> ${page}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Timestamp:</strong> ${phTime}</td></tr>
+      </table>
+      <div style="margin:16px 0;padding:16px;background-color:#fef2f2;border-left:4px solid #ef4444;border-radius:4px;">
+        <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#991b1b;">Description:</p>
+        <p style="margin:0;font-size:14px;color:#374151;white-space:pre-wrap;">${description}</p>
+      </div>
+      <p style="margin:16px 0 0;font-size:14px;color:#374151;"><strong>Screenshot:</strong> ${screenshotBlock}</p>
+      <p style="margin:16px 0 0;font-size:12px;color:#9ca3af;">This report has been logged in the system.</p>
+      ${buildSignoff()}
+    `);
+
+    await sendEmail({ to: ownerEmail, subject, htmlBody: body });
+  } catch (err) {
+    console.error('[email] sendProblemReport error:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 module.exports = {
   sendEmail,
@@ -409,4 +461,5 @@ module.exports = {
   notifySODecision,
   sendSOConfirmationRequest,
   notifyApproverSODecision,
+  sendProblemReport,
 };

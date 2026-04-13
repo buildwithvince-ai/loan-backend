@@ -36,6 +36,9 @@ app.use('/api/confirm', confirmRouter)
 const publicRouter = require('./routes/public')
 app.use('/api/public', publicRouter)
 
+const reportsRouter = require('./routes/reports')
+app.use('/api/reports', reportsRouter)
+
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
