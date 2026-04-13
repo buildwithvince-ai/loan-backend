@@ -166,10 +166,9 @@ router.post('/submit', upload.any(), async (req, res) => {
       })
     }
 
-    // Step 4 — Normalize FinScore
+    // Step 4 — Normalize FinScore (range-aware via service)
     const finscore_raw = finScore.score || 0
-    const finscore_normalized = finscore_raw === 0 ? 0 :
-      Math.round(((finscore_raw - 300) / (999 - 300)) * 100)
+    const finscore_normalized = finScore.normalized || 0
 
     // Step 5 — Compress and upload files to Supabase Storage
     const reference_id = 'GR8-' + Date.now()
@@ -367,7 +366,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
             return { finscore_raw: 0, finscore_normalized: 0 }
           }
           const raw = result.score || 0
-          const normalized = raw === 0 ? 0 : Math.round(((raw - 300) / (999 - 300)) * 100)
+          const normalized = result.normalized || 0
           return { finscore_raw: raw, finscore_normalized: normalized }
         } catch (err) {
           console.error(`[Group] FinScore failed for member ${i} (${member.mobile}):`, err.message)

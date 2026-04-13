@@ -39,25 +39,62 @@ function convertMobile(mobile) {
 
 function detectProductId(mobile) {
   // Detect telco from prefix
-  // Source: https://github.com/0xbitx/PH_Mobile_Number_Prefixes
+  // Source: PH_prefixes_Feb_2023.xlsx
   const converted = mobile.startsWith('09') ? '63' + mobile.slice(1) : mobile
   const prefix = converted.slice(2, 5) // get 3-digit prefix after 63
 
   // DITO checked first — some prefixes overlap with Smart
   const ditoPrefixes = ['895','896','897','898','991','992','993','994']
 
-  // Globe Telecom (including TM)
-  const globePrefixes = ['817','905','906','915','916','917','926','927',
-    '935','936','945','955','956','965','966','967','975','976','977',
-    '995','997']
+  // Globe Telecom (including TM) — full list from PH_prefixes_Feb_2023.xlsx
+  const globePrefixes = [
+    '817','900','901','902','904','905','906','915','916','917',
+    '926','927','935','936','937','945','953','954','955','956',
+    '965','966','967','975','976','977','978','979','986','987',
+    '988','995','996','997'
+  ]
 
-  // Smart (including TNT) + Sun Cellular — all use Q1
-  // Smart: 811-813, 907-914, 918-921, 928-930, 938-940, 946-951, 961, 963, 968-970, 981, 989, 998-999
-  // Sun: 922-925, 931-934, 941-944
+  // Smart (including TNT) + Sun Cellular — all use Q1 (default fallthrough)
 
   if (ditoPrefixes.some(p => prefix === p)) return 'DT1;'
   if (globePrefixes.some(p => prefix === p)) return 'GL1;'
   return 'Q1;' // default to Smart/Sun
+}
+
+/**
+ * Normalize a FinScore raw score to 0–100.
+ *
+ * Prepaid scores: continuous 300–600 range (all products GL1/Q1/DT1)
+ * Postpaid scores: discrete 880/920/960 (band 21/22/23)
+ * Q1 special values: 91/92/93 (Sun Prepaid), -8 (Smart broadband)
+ */
+function normalizeScore(raw) {
+  if (!raw || raw === 0) return 0
+
+  // Q1 special values — Sun Cellular Prepaid risk buckets
+  if (raw === 93) return 75  // Sun Prepaid LOW risk
+  if (raw === 92) return 50  // Sun Prepaid MID risk
+  if (raw === 91) return 25  // Sun Prepaid HIGH risk
+  if (raw === -8) return 10  // Smart broadband HIGH risk
+
+  // Postpaid discrete scores (bands 21/22/23) — all products
+  if (raw === 960) return 90  // Low risk
+  if (raw === 920) return 60  // Medium risk
+  if (raw === 880) return 30  // High risk
+
+  // Q1 Sun Cellular Postpaid (921/922/923)
+  if (raw === 923) return 90  // Low risk
+  if (raw === 922) return 60  // Medium risk
+  if (raw === 921) return 30  // High risk
+
+  // Prepaid continuous range: 300–600
+  if (raw >= 300 && raw <= 600) {
+    return Math.round(((raw - 300) / 300) * 100)
+  }
+
+  // Fallback for unexpected values
+  console.error(`FinScore: unexpected raw score ${raw}, returning 0`)
+  return 0
 }
 
 async function getScore(mobileNumber) {
@@ -92,7 +129,7 @@ async function getScore(mobileNumber) {
     // Handle no score available
     if (data.code === '1000') {
       console.log('FinScore: no score available for this number')
-      return { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
+      return { score: 0, normalized: 0, riskBand: 'N/A', noScore: true }
     }
 
     // Extract score and band from response
@@ -103,8 +140,8 @@ async function getScore(mobileNumber) {
 
     return {
       score,
+      normalized: normalizeScore(score),
       riskBand: band.toString(),
-      fraudFlag: 'false',
       noScore: false
     }
 
@@ -115,13 +152,13 @@ async function getScore(mobileNumber) {
     // 4xx from FinScore = invalid or non-existent phone number
     if (status >= 400 && status < 500) {
       console.error('FinScore: phone not found or invalid —', status, errData)
-      return { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true, phoneNotFound: true }
+      return { score: 0, normalized: 0, riskBand: 'N/A', noScore: true, phoneNotFound: true }
     }
 
     console.error('FinScore error:', errData || error.message)
     // Return safe fallback for network/server errors — do not block application
-    return { score: 0, riskBand: 'N/A', fraudFlag: 'false', noScore: true }
+    return { score: 0, normalized: 0, riskBand: 'N/A', noScore: true }
   }
 }
 
-module.exports = { getScore }
+module.exports = { getScore, normalizeScore }
