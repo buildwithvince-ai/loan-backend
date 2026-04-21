@@ -23,6 +23,10 @@ router.get('/applications', async (req, res) => {
 
 // Get signed file URLs for an application — must be before /:id to avoid route capture
 router.get('/applications/:id/files', async (req, res) => {
+  // Signed URLs expire in 1h — must not be cached by CDN / browser.
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+  res.set('Pragma', 'no-cache')
+
   try {
     const { data: app, error } = await supabase
       .from('applications')
@@ -35,56 +39,71 @@ router.get('/applications/:id/files', async (req, res) => {
     }
 
     const files = app.file_metadata || []
+    if (files.length === 0) return res.json([])
 
-    if (files.length === 0) {
-      return res.json([])
-    }
-
-    // Reconstruct storage_path for legacy rows that pre-date the storage_path field.
-    // Pattern matches submit route: `${reference_id}_${firstName}-${lastName}/${fieldname}_${originalname}`
-    const legacyFolder = (() => {
-      if (!app.reference_id || !app.full_name) return null
+    // Candidate folders — legacy storage paths used 3 patterns over time:
+    //   1. `${reference_id}/${originalname}`                            (oldest)
+    //   2. `${reference_id}_${first}-${last}/${originalname}`           (middle)
+    //   3. `${reference_id}_${first}-${last}/${fieldname}_${origname}`  (current)
+    // We list each candidate folder once, then match each metadata entry.
+    const candidateFolders = []
+    if (app.reference_id && app.full_name) {
       const parts = app.full_name.trim().split(/\s+/)
       const first = parts[0] || ''
       const last = parts.slice(1).join('-') || ''
-      return `${app.reference_id}_${first}-${last}`
-    })()
+      candidateFolders.push(`${app.reference_id}_${first}-${last}`)
+    }
+    if (app.reference_id) candidateFolders.push(app.reference_id)
+
+    const folderIndex = {}
+    await Promise.all(candidateFolders.map(async (folder) => {
+      const { data, error: listErr } = await supabase.storage
+        .from('application-files')
+        .list(folder, { limit: 1000 })
+      if (listErr) {
+        console.error('[admin/files] list error', { folder, error: listErr.message })
+        return
+      }
+      folderIndex[folder] = new Set((data || []).map(x => x.name))
+    }))
+
+    const resolvePath = (file) => {
+      if (file.storage_path) return { path: file.storage_path, source: 'metadata' }
+      const name = file.original_name
+      const field = file.field_name
+      for (const folder of candidateFolders) {
+        const names = folderIndex[folder]
+        if (!names) continue
+        if (field && name && names.has(`${field}_${name}`)) return { path: `${folder}/${field}_${name}`, source: 'list_with_prefix' }
+        if (name && names.has(name)) return { path: `${folder}/${name}`, source: 'list_no_prefix' }
+      }
+      return null
+    }
 
     const signed = await Promise.all(
       files.map(async (file) => {
-        let storage_path = file.storage_path
-        let path_source = 'metadata'
-        if (!storage_path && legacyFolder && file.field_name && file.original_name) {
-          storage_path = `${legacyFolder}/${file.field_name}_${file.original_name}`
-          path_source = 'reconstructed'
-        }
-
-        if (!storage_path) {
-          console.error('[admin/files] no storage_path for', {
-            app_id: req.params.id,
-            field: file.field_name,
-            name: file.original_name,
+        const resolved = resolvePath(file)
+        if (!resolved) {
+          console.error('[admin/files] unresolved path', {
+            app_id: req.params.id, field: file.field_name, name: file.original_name,
+            candidateFolders, knownFiles: Object.fromEntries(Object.entries(folderIndex).map(([k,v]) => [k, [...v]])),
           })
-          return { field: file.field_name || null, name: file.original_name, url: null, debug: 'no_storage_path' }
+          return { field: file.field_name || null, name: file.original_name, url: null, debug: 'no_matching_file_in_bucket' }
         }
 
         const { data, error: signError } = await supabase.storage
           .from('application-files')
-          .createSignedUrl(storage_path, 3600)
+          .createSignedUrl(resolved.path, 3600)
 
         if (signError) {
           console.error('[admin/files] signedUrl error', {
-            app_id: req.params.id,
-            storage_path,
-            path_source,
-            error: signError.message,
-            status: signError.statusCode || signError.status,
+            app_id: req.params.id, storage_path: resolved.path, source: resolved.source,
+            error: signError.message, status: signError.statusCode || signError.status,
           })
           return { field: file.field_name || null, name: file.original_name, url: null, debug: `sign_error:${signError.message}` }
         }
 
         if (!data?.signedUrl) {
-          console.error('[admin/files] empty signedUrl', { app_id: req.params.id, storage_path, path_source, data })
           return { field: file.field_name || null, name: file.original_name, url: null, debug: 'empty_signed_url' }
         }
 
