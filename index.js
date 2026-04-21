@@ -5,7 +5,12 @@ const cors = require('cors')
 
 const app = express()
 
-app.use(cors())
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-secret', 'x-ci-secret']
+}))
 app.use(express.json())
 
 app.get('/', (req, res) => {

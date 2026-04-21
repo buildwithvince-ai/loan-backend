@@ -70,6 +70,54 @@ const verifyToken = async (req, res, next) => {
  * Usage:
  *   router.get('/sensitive', verifyToken, requireRole('super_admin', 'admin'), handler)
  */
+/**
+ * verifyAdminSecret
+ *
+ * Validates the `x-admin-secret` header against process.env.ADMIN_SECRET.
+ * On success, sets req.user to a synthetic admin principal so downstream
+ * code (incl. requireRole) works unchanged.
+ */
+const verifyAdminSecret = (req, res, next) => {
+  const provided = req.headers['x-admin-secret'];
+  const expected = process.env.ADMIN_SECRET;
+  if (!expected) {
+    console.error('[auth] ADMIN_SECRET env var not set');
+    return res.status(500).json({ error: 'Server auth not configured' });
+  }
+  if (!provided || provided !== expected) {
+    return res.status(401).json({ error: 'Invalid or missing admin secret' });
+  }
+  req.user = {
+    id: 'admin-secret',
+    email: null,
+    roles: ['admin', 'super_admin'],
+    full_name: 'Admin Secret Auth',
+  };
+  return next();
+};
+
+/**
+ * verifyAdminSecretOrToken
+ *
+ * Hybrid: accept `x-admin-secret` (matched against ADMIN_SECRET) OR
+ * fall through to Bearer JWT via verifyToken. Lets the admin dashboard
+ * call with either credential.
+ */
+const verifyAdminSecretOrToken = async (req, res, next) => {
+  const provided = req.headers['x-admin-secret'];
+  const expected = process.env.ADMIN_SECRET;
+  if (expected && provided && provided === expected) {
+    req.user = {
+      id: 'admin-secret',
+      email: null,
+      roles: ['admin', 'super_admin'],
+      full_name: 'Admin Secret Auth',
+    };
+    return next();
+  }
+  return verifyToken(req, res, next);
+};
+
 const requireRole = (...requiredRoles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -84,4 +132,4 @@ const requireRole = (...requiredRoles) => {
   };
 };
 
-module.exports = { verifyToken, requireRole };
+module.exports = { verifyToken, verifyAdminSecret, verifyAdminSecretOrToken, requireRole };

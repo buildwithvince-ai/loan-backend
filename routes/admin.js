@@ -1,9 +1,9 @@
 const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
-const { verifyToken, requireRole } = require('../middleware/auth')
+const { verifyAdminSecretOrToken, requireRole } = require('../middleware/auth')
 
-router.use(verifyToken)
+router.use(verifyAdminSecretOrToken)
 
 // List all applications (all authenticated users)
 router.get('/applications', async (req, res) => {
