@@ -5,6 +5,11 @@ const cors = require('cors')
 
 const app = express()
 
+// Disable automatic ETag on JSON responses. Admin files route returns
+// time-limited signed URLs — ETag + conditional GET causes browsers to
+// reuse expired payloads via 304. Other routes don't rely on ETags.
+app.set('etag', false)
+
 app.use(cors({
   origin: true,
   credentials: true,

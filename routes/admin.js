@@ -23,9 +23,16 @@ router.get('/applications', async (req, res) => {
 
 // Get signed file URLs for an application — must be before /:id to avoid route capture
 router.get('/applications/:id/files', async (req, res) => {
-  // Signed URLs expire in 1h — must not be cached by CDN / browser.
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+  // Signed URLs expire in 1h — must not be cached by CDN / browser / edge.
+  // Cache-Control covers browsers. Surrogate-Control specifically tells Fastly
+  // (Railway's edge) not to cache even if Cache-Control is stripped downstream.
+  // Disabling app-level ETag matching for this response also prevents Express
+  // from returning 304 on conditional GETs, which would let the browser reuse
+  // a cached body containing now-expired signed URLs.
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
   res.set('Pragma', 'no-cache')
+  res.set('Surrogate-Control', 'no-store')
+  res.set('Vary', '*')
 
   try {
     const { data: app, error } = await supabase
