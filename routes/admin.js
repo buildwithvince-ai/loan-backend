@@ -26,7 +26,7 @@ router.get('/applications/:id/files', async (req, res) => {
   try {
     const { data: app, error } = await supabase
       .from('applications')
-      .select('file_metadata')
+      .select('file_metadata, reference_id, full_name')
       .eq('id', req.params.id)
       .single()
 
@@ -40,26 +40,61 @@ router.get('/applications/:id/files', async (req, res) => {
       return res.json([])
     }
 
+    // Reconstruct storage_path for legacy rows that pre-date the storage_path field.
+    // Pattern matches submit route: `${reference_id}_${firstName}-${lastName}/${fieldname}_${originalname}`
+    const legacyFolder = (() => {
+      if (!app.reference_id || !app.full_name) return null
+      const parts = app.full_name.trim().split(/\s+/)
+      const first = parts[0] || ''
+      const last = parts.slice(1).join('-') || ''
+      return `${app.reference_id}_${first}-${last}`
+    })()
+
     const signed = await Promise.all(
       files.map(async (file) => {
+        let storage_path = file.storage_path
+        let path_source = 'metadata'
+        if (!storage_path && legacyFolder && file.field_name && file.original_name) {
+          storage_path = `${legacyFolder}/${file.field_name}_${file.original_name}`
+          path_source = 'reconstructed'
+        }
+
+        if (!storage_path) {
+          console.error('[admin/files] no storage_path for', {
+            app_id: req.params.id,
+            field: file.field_name,
+            name: file.original_name,
+          })
+          return { field: file.field_name || null, name: file.original_name, url: null, debug: 'no_storage_path' }
+        }
+
         const { data, error: signError } = await supabase.storage
           .from('application-files')
-          .createSignedUrl(file.storage_path, 3600)
+          .createSignedUrl(storage_path, 3600)
 
         if (signError) {
-          console.error('[admin] signedUrl error for', file.storage_path, signError.message)
+          console.error('[admin/files] signedUrl error', {
+            app_id: req.params.id,
+            storage_path,
+            path_source,
+            error: signError.message,
+            status: signError.statusCode || signError.status,
+          })
+          return { field: file.field_name || null, name: file.original_name, url: null, debug: `sign_error:${signError.message}` }
         }
-        return {
-          field: file.field_name || null,
-          name: file.original_name,
-          url: signError ? null : data?.signedUrl || null
+
+        if (!data?.signedUrl) {
+          console.error('[admin/files] empty signedUrl', { app_id: req.params.id, storage_path, path_source, data })
+          return { field: file.field_name || null, name: file.original_name, url: null, debug: 'empty_signed_url' }
         }
+
+        return { field: file.field_name || null, name: file.original_name, url: data.signedUrl }
       })
     )
 
     return res.json(signed)
   } catch (error) {
-    console.error('[admin] files error:', error.message)
+    console.error('[admin/files] unexpected error:', error.message, error.stack)
     return res.status(500).json({ error: error.message })
   }
 })
