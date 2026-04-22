@@ -62,20 +62,30 @@ router.get('/applications/:id/files', async (req, res) => {
     }
     if (app.reference_id) candidateFolders.push(app.reference_id)
 
+    // Always list candidate folders — even when metadata has storage_path.
+    // A cached/stale storage_path can point at a file that's been moved
+    // (case, spacing, rename drift). Listing is the source of truth.
     const folderIndex = {}
     await Promise.all(candidateFolders.map(async (folder) => {
       const { data, error: listErr } = await supabase.storage
         .from('application-files')
         .list(folder, { limit: 1000 })
       if (listErr) {
-        console.error('[admin/files] list error', { folder, error: listErr.message })
+        console.error('[admin/files] list error', { folder, error: listErr.message, status: listErr.statusCode || listErr.status })
         return
       }
       folderIndex[folder] = new Set((data || []).map(x => x.name))
     }))
 
-    const resolvePath = (file) => {
-      if (file.storage_path) return { path: file.storage_path, source: 'metadata' }
+    const totalListedFiles = Object.values(folderIndex).reduce((n, s) => n + s.size, 0)
+    console.log('[admin/files] folder listing', {
+      app_id: req.params.id,
+      candidateFolders,
+      listedCounts: Object.fromEntries(Object.entries(folderIndex).map(([k, v]) => [k, v.size])),
+      totalListedFiles,
+    })
+
+    const pickByListing = (file) => {
       const name = file.original_name
       const field = file.field_name
       for (const folder of candidateFolders) {
@@ -87,34 +97,49 @@ router.get('/applications/:id/files', async (req, res) => {
       return null
     }
 
+    const trySign = async (path) => {
+      const { data, error: signError } = await supabase.storage
+        .from('application-files')
+        .createSignedUrl(path, 3600)
+      if (signError) return { signError }
+      if (!data?.signedUrl) return { empty: true }
+      return { url: data.signedUrl }
+    }
+
     const signed = await Promise.all(
       files.map(async (file) => {
-        const resolved = resolvePath(file)
-        if (!resolved) {
-          console.error('[admin/files] unresolved path', {
-            app_id: req.params.id, field: file.field_name, name: file.original_name,
-            candidateFolders, knownFiles: Object.fromEntries(Object.entries(folderIndex).map(([k,v]) => [k, [...v]])),
-          })
-          return { field: file.field_name || null, name: file.original_name, url: null, debug: 'no_matching_file_in_bucket' }
+        // Attempt 1 — listing-resolved path (authoritative)
+        const listed = pickByListing(file)
+        if (listed) {
+          const { url, signError } = await trySign(listed.path)
+          if (url) return { field: file.field_name || null, name: file.original_name, url }
+          if (signError) {
+            console.error('[admin/files] signedUrl error (listed path)', {
+              app_id: req.params.id, path: listed.path, source: listed.source,
+              error: signError.message, status: signError.statusCode || signError.status,
+            })
+          }
         }
 
-        const { data, error: signError } = await supabase.storage
-          .from('application-files')
-          .createSignedUrl(resolved.path, 3600)
-
-        if (signError) {
-          console.error('[admin/files] signedUrl error', {
-            app_id: req.params.id, storage_path: resolved.path, source: resolved.source,
-            error: signError.message, status: signError.statusCode || signError.status,
-          })
-          return { field: file.field_name || null, name: file.original_name, url: null, debug: `sign_error:${signError.message}` }
+        // Attempt 2 — fall back to metadata-stored path
+        if (file.storage_path) {
+          const { url, signError } = await trySign(file.storage_path)
+          if (url) return { field: file.field_name || null, name: file.original_name, url }
+          if (signError) {
+            console.error('[admin/files] signedUrl error (metadata path)', {
+              app_id: req.params.id, path: file.storage_path, source: 'metadata',
+              error: signError.message, status: signError.statusCode || signError.status,
+              note: 'check SUPABASE_SERVICE_KEY on Railway and bucket RLS policies',
+            })
+          }
         }
 
-        if (!data?.signedUrl) {
-          return { field: file.field_name || null, name: file.original_name, url: null, debug: 'empty_signed_url' }
+        return {
+          field: file.field_name || null,
+          name: file.original_name,
+          url: null,
+          debug: listed ? `sign_error_all_attempts:${listed.path}` : 'no_matching_file_in_bucket',
         }
-
-        return { field: file.field_name || null, name: file.original_name, url: data.signedUrl }
       })
     )
 
