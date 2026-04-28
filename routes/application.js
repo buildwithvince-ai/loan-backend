@@ -11,9 +11,10 @@ const { notifySalesOfficer, notifyTeamByRole } = require('../services/email')
 function preQualify(formData) {
   const reasons = []
 
-  // Age check (21-65)
-  if (formData.dob) {
-    const dob = new Date(formData.dob)
+  // Age check (21-65) — frontend may send dateOfBirth or legacy dob
+  const dobValue = formData.dateOfBirth || formData.dob
+  if (dobValue) {
+    const dob = new Date(dobValue)
     const today = new Date()
     let age = today.getFullYear() - dob.getFullYear()
     const m = today.getMonth() - dob.getMonth()
@@ -214,7 +215,7 @@ router.post('/submit', upload.any(), async (req, res) => {
         full_name: formData.firstName + ' ' + formData.lastName,
         email: formData.email,
         loan_amount: formData.loanAmount,
-        loan_term: formData.loanTerm,
+        loan_term: formData.paymentTerm || formData.loanTerm,
         form_data: formData,
         finscore_raw,
         finscore_normalized,
@@ -255,7 +256,8 @@ router.post('/submit', upload.any(), async (req, res) => {
 // Group / SBL multi-member submit route
 router.post('/submit-group', upload.any(), async (req, res) => {
   try {
-    const { loanType, totalLoanAmount, loanTerm, groupName } = req.body
+    const { loanType, totalLoanAmount, groupName } = req.body
+    const loanTerm = req.body.paymentTerm || req.body.loanTerm
     const members = typeof req.body.members === 'string'
       ? JSON.parse(req.body.members)
       : req.body.members
@@ -335,9 +337,10 @@ router.post('/submit-group', upload.any(), async (req, res) => {
           memberErrors.push(`Member ${i + 1}: Loan amount must be between ₱${memberLimit.min.toLocaleString()} and ₱${memberLimit.max.toLocaleString()}`)
         }
       }
-      // Age check
-      if (member.dob) {
-        const dob = new Date(member.dob)
+      // Age check — frontend may send dateOfBirth or legacy dob
+      const memberDob = member.dateOfBirth || member.dob
+      if (memberDob) {
+        const dob = new Date(memberDob)
         const today = new Date()
         let age = today.getFullYear() - dob.getFullYear()
         const m = today.getMonth() - dob.getMonth()
