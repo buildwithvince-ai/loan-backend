@@ -28,3 +28,34 @@ Read this file at the start of every session. Append key decisions, discoveries,
 - Issue 1 (renewal): scope = "all approved apps" — confirmed. Borrower search endpoint TBD this phase.
 - Issue 3: 72h auto-expire confirmed. Reject → back to `approver` confirmed.
 
+---
+
+## 2026-04-29 — Issue 6 / Issue 1 / Issue 3 shipped (commit `394f790`)
+
+### BLOCKER (Loandisk loan auto-creation) — RESOLVED
+- New: `config/loanProducts.js`, `services/loanCalc.js`, `services/loandisk.js#createLoan` + `buildLoanPayload`. Migration 007 adds approved-rate/fee/loan-id columns.
+- Fees field structure decided from `docs/loandisk-api-documentation.pdf` p.32: `loan_fee_id_13777` (Service Processing %) + `loan_fee_id_14282` (Insurance) + `loan_fee_schedule_<id>='charge_fees_on_released_date'`. Send the percentage value as a number (e.g. `5.00`).
+- `loan_disbursed_by_id`: out-of-scope per ops, but the API marks it Required. Default `188405` (Cash); env override `LOANDISK_DISBURSED_BY_ID`. **Verify on first staging call.**
+- `discount_reason` rejected in validator when `interest_rate < 5`. Persisted both `approved_interest_rate` and `discount_reason`.
+- Smoke test verified: 70k → 3500 service + 700 insurance = 4200 fees, 65800 net; 12mo×5%×70k = 42000 (matches BLOCKER.md production sample). Weekly cap at 24 repayments works.
+
+### Issue 1 (renewal) — SHIPPED
+- `GET /api/borrowers/search?q=` — Supabase-sourced from `applications` where `loandisk_borrower_id IS NOT NULL`. Min 2 chars, max 10, deduped, public, rate-limited 30/min. Indexed on `lower(full_name)` + `phone` (migration 008).
+- Submit accepts top-level `application_category` (`'new'` | `'renewal'`) and `linked_borrower_id`. Renewal without a valid link → 400.
+- Pipeline approval: `executeLoandiskApproval` skips `createBorrower` + file upload when `application_category='renewal'` and `linked_borrower_id` is set. Also reuses `loandisk_borrower_id` when an earlier approval attempt left one — idempotent retry.
+
+### Issue 3 (SA confirmation loop) — SHIPPED
+- `/approve` body now accepts `adjusted_amount` + `adjusted_term`. Diff check: if either differs from persisted `loan_amount`/`loan_term`, status → `pending_sa_confirmation`, proposed values stored in `approver_proposed_amount`/`approver_proposed_term`, **no Loandisk push**.
+- `/confirm-terms` (admin/super_admin): adopts proposed values, runs deferred push via shared helper, advances stage.
+- `/reject-terms` (admin/super_admin): requires non-empty `note`, resets `status='pending'` + `stage='approver'`, clears proposed values, stores `sa_rejection_note` + appends `stage_history` entry of `{ type: 'sa_rejection', by, by_name, at, meta:{ note } }`.
+- Statuses now in use: `pending`, `pending_sa_confirmation`, `approved`, `declined` (free text — no DB enum).
+- Frontend filter for "SA-rejected, awaiting re-review": `status='pending' AND stage='approver' AND sa_rejection_note IS NOT NULL`.
+
+### Rate limiting
+- `express-rate-limit` mounted in `index.js`. `/api/application/submit*` capped at 10/min, `/api/borrowers/*` at 30/min. `app.set('trust proxy', 1)` for Railway.
+
+### Pending
+- Verify on first staging approval: fee field structure + Cash placeholder for `loan_disbursed_by_id`. Watch `[loandisk:buildLoanPayload]` log lines.
+- No unit tests written (no test runner in repo). Pure helpers in `services/loanCalc.js` are testable when one is added.
+- No frontend changes — discount-reason input, scheme dropdown, fee preview, renewal picker, SA confirm/reject screens still TODO on the frontend repo.
+

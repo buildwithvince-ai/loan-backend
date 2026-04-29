@@ -151,3 +151,75 @@ Chronological record of major architectural decisions, pivots, and tradeoffs. Ea
 **After:** `GET /api/public/sales-officers` returns active SOs (id + name) with no auth. Frontend form includes a dropdown for applicants to select their assigned SO. Both `/submit` and `/submit-group` validate and persist `sales_officer_id`.
 
 **Why:** Enables SO assignment at intake rather than post-submission, reducing manual admin work.
+
+---
+
+## 012 — Loandisk Loan Auto-Creation
+**Date:** 2026-04-29  
+**Status:** Active
+
+**Before:** Approval flow created the Loandisk borrower but did not create the loan record. Ops keyed loan terms manually in Loandisk after approval.
+
+**After:** On approval, `services/pipeline.js` invokes `createLoan` (in `services/loandisk.js`) with the full `add_loan` payload. Pure helpers in `services/loanCalc.js` derive repayments, fees, and total interest. Static config in `config/loanProducts.js` maps loan_type → Loandisk product id and allowed payment schemes.
+
+**Decisions captured from ops (BLOCKER.md):**
+- Interest rate: 5% default, monthly, flat_rate, applied across the loan term. Approver may discount down to 3% with a required `discount_reason`.
+- Payment schemes: Monthly=3, 15-30 semi-monthly=3413 (NOT biweekly=9), Weekly=4 (AKAP only, capped at 24 repayments).
+- Fees: 5% service processing (`loan_fee_id_13777`) + 1% insurance (`loan_fee_id_14282`), both deductible, scheduled `charge_fees_on_released_date`. Field IDs sourced from `docs/loandisk-api-documentation.pdf` p.32.
+- `loan_disbursed_by_id`: out-of-scope per ops, but Loandisk marks it Required. Default Cash (188405); env override `LOANDISK_DISBURSED_BY_ID`.
+- Decimal places: `round_off_to_two_decimal`. Duration period: `Months`. Range 3-24 months.
+
+**Migration:** 007_loan_creation_fields.sql — `approved_interest_rate`, `discount_reason`, `payment_scheme_id`, `num_of_repayments`, `service_fee_amount`, `insurance_fee_amount`, `total_fees_amount`, `net_disbursement_amount`, `total_interest_amount`, `loandisk_loan_id`, `loan_released_at`.
+
+**To verify on first staging call:** fee field structure (`loan_fee_id_<id>` percentage value) and whether Loandisk accepts the Cash placeholder for `loan_disbursed_by_id`. `[loandisk:buildLoanPayload]` log lines emit the full computed payload + sanity-check on every approval.
+
+---
+
+## 013 — Renewal Flow + Borrower Search
+**Date:** 2026-04-29  
+**Status:** Active
+
+**Before:** Every approved application created a new Loandisk borrower, even when the applicant was an existing borrower. No way for the frontend to identify prior borrowers at intake.
+
+**After:**
+- `GET /api/borrowers/search?q=` — public, rate-limited (30/min), Supabase-sourced from rows where `loandisk_borrower_id IS NOT NULL`. Min 2-char query, max 10 results, deduped by `loandisk_borrower_id`.
+- `POST /api/application/submit` accepts `application_category` (`'new'` | `'renewal'`) and `linked_borrower_id` at the top level. Renewal without a valid linked id → 400.
+- Approval guard: when `application_category='renewal'` and `linked_borrower_id` is set, `executeLoandiskApproval` skips `createBorrower` + file upload and uses the linked borrower id directly. `loandisk_borrower_id` is also reused on retry (idempotency for ops).
+
+**Migration:** 008_renewal_and_sa_confirmation.sql — adds `application_category`, `linked_borrower_id`, indexes on `lower(full_name)` and `phone` for search performance.
+
+**Why:** Returning borrowers shouldn't be re-created in Loandisk (ops cleanup burden, lost history, duplicate borrower records).
+
+---
+
+## 014 — Approver Modified Terms + SA Confirmation Loop
+**Date:** 2026-04-29  
+**Status:** Active
+
+**Before:** Approver decisions were a single binary action (approve / decline). Any term adjustment had to happen verbally outside the system.
+
+**After:** `PATCH /api/admin/applications/:id/approve` now accepts `adjusted_amount` and `adjusted_term`. When either differs from the persisted `loan_amount` / `loan_term`, the application flips to `status='pending_sa_confirmation'` and the Loandisk push is deferred until the SA confirms.
+
+- `PATCH /api/admin/applications/:id/confirm-terms` — adopts proposed values into `loan_amount`/`loan_term`, runs the deferred Loandisk push via the shared `executeLoandiskApproval` helper.
+- `PATCH /api/admin/applications/:id/reject-terms` — requires `note`, resets `status='pending'` + `stage='approver'`, clears `approver_proposed_*`, stores `sa_rejection_note` and appends a `{ type: 'sa_rejection' }` entry to `stage_history`.
+
+**Migration:** 008 (combined with renewal columns) — `approver_proposed_amount`, `approver_proposed_term`, `approver_proposed_at/by`, `sa_rejection_note`, `sa_rejection_at/by`.
+
+**Status enum (free text, no DB constraint):** `pending`, `pending_sa_confirmation`, `approved`, `declined`.
+
+**Reject target status decision:** `pending` + `stage='approver'`. Reasoning: keeps the application in the approver's queue for re-review without polluting the status enum with another value. Frontend filter for "rejected by SA": `status='pending' AND stage='approver' AND sa_rejection_note IS NOT NULL`.
+
+---
+
+## 015 — Rate Limiting on Public Routes
+**Date:** 2026-04-29  
+**Status:** Active
+
+**Before:** No throttling on public submit or borrower search. Open to scraping and abuse.
+
+**After:** `express-rate-limit` applied at the router-mount level in `index.js`:
+- `/api/application/submit` + `/submit-group`: 10 req / min / IP
+- `/api/borrowers/*`: 30 req / min / IP
+- `app.set('trust proxy', 1)` so the limiter keys on the real client IP behind Railway's edge.
+
+Tuned for low-volume lending traffic; tight enough to slow scrapers, generous enough not to bite real users.
