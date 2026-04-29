@@ -1,8 +1,9 @@
 'use strict';
 
 const { supabase } = require('./supabase');
-const { createBorrower, uploadAllFiles } = require('./loandisk');
+const { createBorrower, createLoan, uploadAllFiles } = require('./loandisk');
 const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
+const { getProductConfig, LOAN_DEFAULTS } = require('../config/loanProducts');
 
 const VALID_STAGES = [
   'sales_officer',
@@ -12,6 +13,149 @@ const VALID_STAGES = [
   'loan_processing_officer',
   'declined'
 ];
+
+// ---------------------------------------------------------------------------
+// executeLoandiskApproval
+//
+// Runs the full Loandisk approval side effect for an application:
+//   1. Resolve loan inputs (principal, term, rate, scheme) from `meta`,
+//      falling back to the application row.
+//   2. Reuse linked Loandisk borrower for renewals; create one otherwise.
+//   3. Upload Supabase-stored files into the Loandisk borrower.
+//   4. Create the Loandisk loan record (fees included, disbursement skipped).
+//   5. Persist borrower id, loan id, fee snapshot and approved terms.
+//
+// Used by:
+//   - approver->loan_processing_officer guard (direct approval, no diff)
+//   - confirm-terms admin route (SA-confirmed adjusted terms)
+// ---------------------------------------------------------------------------
+async function executeLoandiskApproval(application, user, meta = {}) {
+  const { data: fullApp, error: fetchError } = await supabase
+    .from('applications')
+    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, approver_proposed_amount, approver_proposed_term')
+    .eq('id', application.id)
+    .single();
+
+  if (fetchError) {
+    throw new Error('Failed to fetch application data: ' + fetchError.message);
+  }
+
+  const formData = fullApp.form_data;
+  const finScore = {
+    score: fullApp.finscore_raw,
+    riskBand: 'N/A',
+    fraudFlag: 'false'
+  };
+
+  const productCfg = getProductConfig(fullApp.loan_type);
+  if (!productCfg) {
+    throw new Error(`Unknown loan_type "${fullApp.loan_type}" — cannot map to Loandisk product`);
+  }
+
+  // Principal/duration: prefer meta override, then SA-confirmed proposed
+  // values on the row, then the persisted loan_amount/loan_term.
+  const principal = Number(meta.principal ?? fullApp.approver_proposed_amount ?? fullApp.loan_amount);
+  const duration_months = Number(meta.duration_months ?? fullApp.approver_proposed_term ?? fullApp.loan_term);
+  const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : LOAN_DEFAULTS.interest_rate;
+  const payment_scheme_id = meta.payment_scheme_id != null
+    ? Number(meta.payment_scheme_id)
+    : productCfg.default_payment_scheme;
+  const discount_reason = meta.discount_reason || null;
+
+  if (interest_rate < LOAN_DEFAULTS.interest_rate && !discount_reason) {
+    throw new Error('discount_reason is required when interest_rate is below the default');
+  }
+
+  // Renewal reuse: use linked Loandisk borrower id when present and skip
+  // the createBorrower call. Falls back to creating a new borrower for
+  // `new` applications (or renewals missing a link, though /submit blocks that).
+  let borrowerId;
+  const isRenewal = fullApp.application_category === 'renewal' && fullApp.linked_borrower_id;
+  if (isRenewal) {
+    borrowerId = fullApp.linked_borrower_id;
+    console.log('[pipeline:approve] renewal — reusing Loandisk borrower', { application_id: application.id, borrowerId });
+  } else if (fullApp.loandisk_borrower_id) {
+    // Idempotency: prior approval attempt already created the borrower.
+    borrowerId = fullApp.loandisk_borrower_id;
+    console.log('[pipeline:approve] reusing existing Loandisk borrower', { application_id: application.id, borrowerId });
+  } else {
+    borrowerId = await createBorrower(formData, finScore);
+  }
+
+  // Files: only upload for fresh borrowers. Renewals already have docs in Loandisk.
+  if (!isRenewal) {
+    const fileMetadata = fullApp.file_metadata || [];
+    if (fileMetadata.length > 0) {
+      const filesToUpload = [];
+      for (const fileMeta of fileMetadata) {
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from('application-files')
+          .download(fileMeta.storage_path);
+
+        if (downloadError) {
+          console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
+          continue;
+        }
+
+        const buffer = Buffer.from(await fileData.arrayBuffer());
+        filesToUpload.push({
+          originalname: fileMeta.original_name,
+          buffer
+        });
+      }
+
+      if (filesToUpload.length > 0) {
+        await uploadAllFiles(borrowerId, filesToUpload);
+        console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`);
+      }
+    }
+  }
+
+  let loanResult;
+  try {
+    loanResult = await createLoan({
+      borrower_id: borrowerId,
+      loan_type: fullApp.loan_type,
+      principal,
+      duration_months,
+      interest_rate,
+      payment_scheme_id,
+      discount_reason,
+      loan_application_id: fullApp.reference_id,
+      approver_id: user.id
+    });
+  } catch (loanErr) {
+    console.error('[pipeline:approve] createLoan failed after borrower resolved', {
+      borrower_id: borrowerId,
+      application_id: application.id,
+      error: loanErr.message
+    });
+    throw new Error('Borrower resolved but loan creation failed: ' + loanErr.message);
+  }
+
+  const { error: updateError } = await supabase
+    .from('applications')
+    .update({
+      loandisk_borrower_id: borrowerId,
+      loandisk_loan_id: loanResult.loan_id,
+      approved_interest_rate: interest_rate,
+      discount_reason,
+      payment_scheme_id,
+      num_of_repayments: loanResult.num_of_repayments,
+      service_fee_amount: loanResult.fees.service_fee,
+      insurance_fee_amount: loanResult.fees.insurance_fee,
+      total_fees_amount: loanResult.fees.total_fees,
+      net_disbursement_amount: loanResult.fees.net_disbursement,
+      total_interest_amount: loanResult.total_interest,
+      loan_released_at: new Date().toISOString(),
+      status: 'approved'
+    })
+    .eq('id', application.id);
+
+  if (updateError) {
+    throw new Error('Failed to update application after Loandisk push: ' + updateError.message);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Transition guards
@@ -56,7 +200,7 @@ const TRANSITION_GUARDS = {
     return { allowed: true, reason: 'Advancing to approver' };
   },
 
-  'approver->loan_processing_officer': async (application, user) => {
+  'approver->loan_processing_officer': async (application, user, meta = {}) => {
     if (application.ci_score === null || application.ci_score === undefined) {
       return { allowed: false, reason: 'CI score required' };
     }
@@ -67,65 +211,10 @@ const TRANSITION_GUARDS = {
       return { allowed: false, reason: 'Only admins or approvers can approve applications' };
     }
 
-    // --- Loandisk approval side effect ---
-    const { data: fullApp, error: fetchError } = await supabase
-      .from('applications')
-      .select('form_data, file_metadata, finscore_raw')
-      .eq('id', application.id)
-      .single();
-
-    if (fetchError) {
-      throw new Error('Failed to fetch application data: ' + fetchError.message);
-    }
-
-    const formData = fullApp.form_data;
-    const finScore = {
-      score: fullApp.finscore_raw,
-      riskBand: 'N/A',
-      fraudFlag: 'false'
-    };
-
-    const borrowerId = await createBorrower(formData, finScore);
-
-    // Download each file from Supabase Storage and collect for batch upload
-    const fileMetadata = fullApp.file_metadata || [];
-    if (fileMetadata.length > 0) {
-      const filesToUpload = [];
-
-      for (const fileMeta of fileMetadata) {
-        const { data: fileData, error: downloadError } = await supabase.storage
-          .from('application-files')
-          .download(fileMeta.storage_path);
-
-        if (downloadError) {
-          console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
-          continue;
-        }
-
-        const buffer = Buffer.from(await fileData.arrayBuffer());
-        filesToUpload.push({
-          originalname: fileMeta.original_name,
-          buffer
-        });
-      }
-
-      if (filesToUpload.length > 0) {
-        await uploadAllFiles(borrowerId, filesToUpload);
-        console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`);
-      }
-    }
-
-    // Persist Loandisk borrower ID and mark status approved
-    const { error: updateError } = await supabase
-      .from('applications')
-      .update({
-        loandisk_borrower_id: borrowerId,
-        status: 'approved'
-      })
-      .eq('id', application.id);
-
-    if (updateError) {
-      throw new Error('Failed to update application after Loandisk push: ' + updateError.message);
+    try {
+      await executeLoandiskApproval(application, user, meta);
+    } catch (err) {
+      throw err;
     }
 
     return { allowed: true, reason: 'Approved and pushed to Loandisk' };
@@ -372,4 +461,4 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
   return updated;
 };
 
-module.exports = { VALID_STAGES, transitionStage };
+module.exports = { VALID_STAGES, transitionStage, executeLoandiskApproval };

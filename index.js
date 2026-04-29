@@ -2,8 +2,32 @@ require('dotenv').config()
 
 const express = require('express')
 const cors = require('cors')
+const rateLimit = require('express-rate-limit')
 
 const app = express()
+
+// Trust the Railway / proxy `X-Forwarded-For` so rate limiters key on the
+// real client IP rather than the proxy.
+app.set('trust proxy', 1)
+
+// Public, unauthenticated routes need rate limits. Tuned for low-volume
+// lending traffic — generous enough not to bite real users, tight enough
+// to slow scrapers/credential-stuffing.
+const submitLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: 'error', message: 'Too many submissions. Please wait a minute and try again.' }
+})
+
+const searchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many search requests. Please slow down.' }
+})
 
 // Disable automatic ETag on JSON responses. Admin files route returns
 // time-limited signed URLs — ETag + conditional GET causes browsers to
@@ -23,7 +47,14 @@ app.get('/', (req, res) => {
 })
 
 const applicationRouter = require('./routes/application')
+// Apply submit limiter only to the public submit endpoints. Test/admin
+// helpers under /api/application/test-* stay unthrottled.
+app.use('/api/application/submit', submitLimiter)
+app.use('/api/application/submit-group', submitLimiter)
 app.use('/api/application', applicationRouter)
+
+const borrowersRouter = require('./routes/borrowers')
+app.use('/api/borrowers', searchLimiter, borrowersRouter)
 
 const adminRouter = require('./routes/admin')
 app.use('/api/admin', adminRouter)

@@ -1,4 +1,18 @@
 const axios = require('axios')
+const {
+  PAYMENT_SCHEME_IDS,
+  LOAN_DEFAULTS,
+  FEE_CONFIG,
+  DISBURSEMENT,
+  getProductConfig,
+  normalizeLoanType
+} = require('../config/loanProducts')
+const {
+  calculateRepayments,
+  calculateLoanFees,
+  calculateTotalInterest,
+  validateLoanInputs
+} = require('./loanCalc')
 
 // ---------------------------------------------------------------------------
 // Loandisk borrower payload mapping
@@ -364,6 +378,142 @@ async function uploadAllFiles(borrowerId, files) {
   return fileIds
 }
 
+// ---------------------------------------------------------------------------
+// Loandisk loan creation
+//
+// add_loan field reference: docs/loandisk-api-documentation.pdf p.18-20.
+// Required fields handled here: loan_product_id, loan_principal_amount,
+// loan_released_date, loan_interest_method, loan_interest_type,
+// loan_interest_period, loan_duration_period, loan_duration,
+// loan_payment_scheme_id, loan_num_of_repayments, loan_decimal_places,
+// loan_application_id, loan_disbursed_by_id (placeholder — see below).
+//
+// Disbursement: out of scope per ops, but the API marks loan_disbursed_by_id
+// Required. We send Cash (188405) by default; override via env if ops picks
+// a different placeholder.
+//
+// Fees: included as loan_fee_id_<id> percentage + loan_fee_schedule_<id>
+// strategy. Both fees are deductible on release date.
+// ---------------------------------------------------------------------------
+
+function formatMMDDYYYY(date) {
+  const d = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(d.getTime())) return ''
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const yyyy = d.getFullYear()
+  return `${mm}/${dd}/${yyyy}`
+}
+
+function disbursedById() {
+  const fromEnv = process.env[DISBURSEMENT.env_override_key]
+  return fromEnv ? Number(fromEnv) : DISBURSEMENT.default_disbursed_by_id
+}
+
+// Build the full add_loan payload from approved-application inputs.
+// Pure: takes already-validated values and returns a flat object.
+function buildLoanPayload(input) {
+  const {
+    borrower_id,
+    loan_type,
+    principal,
+    duration_months,
+    interest_rate,
+    payment_scheme_id,
+    loan_application_id,
+    released_date
+  } = input
+
+  const product = getProductConfig(loan_type)
+  if (!product) throw new Error(`buildLoanPayload: unknown loan_type ${loan_type}`)
+
+  const num_of_repayments = calculateRepayments(duration_months, payment_scheme_id)
+  const fees = calculateLoanFees(principal)
+  const totalInterest = calculateTotalInterest(principal, interest_rate, duration_months)
+
+  // Sanity check: principal × rate × duration === total_interest
+  const sanity = (principal * (interest_rate / 100) * duration_months).toFixed(2)
+  console.log(`[loandisk:buildLoanPayload] interest sanity: principal=${principal} rate=${interest_rate} months=${duration_months} -> total=${sanity} (matches=${Number(sanity) === totalInterest})`)
+  console.log(`[loandisk:buildLoanPayload] fees: service=${fees.service_fee} insurance=${fees.insurance_fee} total=${fees.total_fees} net=${fees.net_disbursement}`)
+
+  const serviceFeeId = FEE_CONFIG.loandisk_fee_ids.service_processing
+  const insuranceFeeId = FEE_CONFIG.loandisk_fee_ids.insurance
+  const feeSchedule = FEE_CONFIG.loandisk_fee_schedule
+
+  const payload = {
+    loan_product_id: product.loandisk_product_id,
+    borrower_id,
+    loan_application_id: loan_application_id || `GR8-${Date.now()}`,
+    loan_disbursed_by_id: disbursedById(),
+    loan_principal_amount: Number(principal).toFixed(2),
+    loan_released_date: released_date || formatMMDDYYYY(new Date()),
+    loan_interest_method: LOAN_DEFAULTS.interest_method,
+    loan_interest_type: LOAN_DEFAULTS.interest_type,
+    loan_interest_period: LOAN_DEFAULTS.interest_period,
+    loan_interest: Number(interest_rate),
+    loan_duration_period: LOAN_DEFAULTS.duration_period,
+    loan_duration: Number(duration_months),
+    loan_payment_scheme_id: Number(payment_scheme_id),
+    loan_num_of_repayments: num_of_repayments,
+    loan_decimal_places: LOAN_DEFAULTS.decimal_places,
+    // Fees: send rate as a percentage (Loandisk's `loan_fee_id_<id>` accepts
+    // numbers/decimals — the form treats this as the percentage value when
+    // the fee is configured as %).
+    [`loan_fee_id_${serviceFeeId}`]: (FEE_CONFIG.service_processing_fee_rate * 100).toFixed(2),
+    [`loan_fee_schedule_${serviceFeeId}`]: feeSchedule,
+    [`loan_fee_id_${insuranceFeeId}`]: (FEE_CONFIG.insurance_fee_rate * 100).toFixed(2),
+    [`loan_fee_schedule_${insuranceFeeId}`]: feeSchedule
+  }
+
+  return { payload, fees, num_of_repayments, total_interest: totalInterest }
+}
+
+async function createLoan(input) {
+  const { valid, errors } = validateLoanInputs(input)
+  if (!valid) {
+    const msg = `Loandisk createLoan validation failed: ${errors.join('; ')}`
+    console.error(`[loandisk:createLoan] ${msg}`, { input: { ...input, discount_reason: input.discount_reason ? '<set>' : '<unset>' } })
+    throw new Error(msg)
+  }
+
+  if (!input.borrower_id) {
+    throw new Error('createLoan: borrower_id required')
+  }
+
+  const { payload, fees, num_of_repayments, total_interest } = buildLoanPayload(input)
+
+  // Discount audit log
+  if (Number(input.interest_rate) < LOAN_DEFAULTS.interest_rate) {
+    console.log('[loandisk:createLoan] discount applied', {
+      borrower_id: input.borrower_id,
+      loan_application_id: payload.loan_application_id,
+      approved_rate: input.interest_rate,
+      default_rate: LOAN_DEFAULTS.interest_rate,
+      reason: input.discount_reason,
+      approver_id: input.approver_id || null
+    })
+  }
+
+  const url = `${baseUrl()}/loan`
+  const headers = authHeaders()
+  const start = Date.now()
+
+  console.log('[loandisk:createLoan] payload=', truncate(JSON.stringify(payload)))
+
+  try {
+    const response = await axios.post(url, payload, { headers })
+    logCall({ op: 'createLoan', method: 'POST', url, response: response.data, elapsedMs: Date.now() - start })
+    const loanId = response.data?.response?.loan_id || response.data?.response?.Results?.[0]?.loan_id
+    if (!loanId) {
+      console.warn('[loandisk:createLoan] response did not contain loan_id; full response logged above')
+    }
+    return { loan_id: loanId || null, fees, num_of_repayments, total_interest, payload }
+  } catch (err) {
+    logCall({ op: 'createLoan', method: 'POST', url, payload, error: err, elapsedMs: Date.now() - start })
+    throw err
+  }
+}
+
 module.exports = {
   createBorrower,
   updateBorrower,
@@ -371,5 +521,7 @@ module.exports = {
   uploadAllFiles,
   uploadFile,
   buildBorrowerPayload,
+  buildLoanPayload,
+  createLoan,
   MIDDLE_NAME_STRATEGY
 }

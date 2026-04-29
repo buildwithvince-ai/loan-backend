@@ -117,6 +117,35 @@ router.post('/submit', upload.any(), async (req, res) => {
       }
     }
 
+    // Renewal validation — accept application_category + linked_borrower_id
+    // at the top level of the form payload. `new` is the default; `renewal`
+    // requires a linked_borrower_id that exists on a previously-approved
+    // application (loandisk_borrower_id present).
+    const application_category = (formData.application_category === 'renewal') ? 'renewal' : 'new'
+    let linked_borrower_id = null
+    if (application_category === 'renewal') {
+      const provided = String(formData.linked_borrower_id || '').trim()
+      if (!provided) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'linked_borrower_id is required for renewal applications.'
+        })
+      }
+      const { data: linkCheck } = await supabase
+        .from('applications')
+        .select('id, loandisk_borrower_id')
+        .eq('loandisk_borrower_id', provided)
+        .limit(1)
+        .maybeSingle()
+      if (!linkCheck) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'linked_borrower_id does not match any approved borrower.'
+        })
+      }
+      linked_borrower_id = provided
+    }
+
     // Step 1 — Check for existing pending application with same phone
     const { data: existing } = await supabase
       .from('applications')
@@ -226,7 +255,9 @@ router.post('/submit', upload.any(), async (req, res) => {
         consent_agreed,
         consent_agreed_at,
         prior_decline_flag,
-        prior_decline_reference
+        prior_decline_reference,
+        application_category,
+        linked_borrower_id
       })
 
     if (error) throw error

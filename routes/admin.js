@@ -254,15 +254,197 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
   }
 })
 
-// Approve application — DEPRECATED: use PATCH /api/pipeline/:id/transition { to_stage: 'loan_processing_officer' }
-// Kept as a convenience wrapper that delegates to the pipeline transition.
+// Approve application.
+// Body fields forwarded to the approval guard:
+//   interest_rate, payment_scheme_id, discount_reason
+// Adjusted-terms loop (Issue 3):
+//   adjusted_amount, adjusted_term — when either differs from the original
+//   loan_amount/loan_term, status flips to `pending_sa_confirmation` and the
+//   Loandisk push is deferred until the SA confirms via /confirm-terms.
 router.patch('/applications/:id/approve', requireRole('admin', 'super_admin'), async (req, res) => {
   try {
+    const adjustedAmount = req.body?.adjusted_amount != null ? Number(req.body.adjusted_amount) : null
+    const adjustedTerm = req.body?.adjusted_term != null ? Number(req.body.adjusted_term) : null
+
+    // Diff branch — fetch the row to compare against persisted values.
+    if (adjustedAmount != null || adjustedTerm != null) {
+      const { data: current, error: fetchErr } = await supabase
+        .from('applications')
+        .select('id, loan_amount, loan_term, status, stage')
+        .eq('id', req.params.id)
+        .single()
+
+      if (fetchErr || !current) {
+        return res.status(404).json({ error: 'Application not found' })
+      }
+
+      const origAmount = Number(current.loan_amount)
+      const origTerm = Number(current.loan_term)
+      const proposedAmount = adjustedAmount != null ? adjustedAmount : origAmount
+      const proposedTerm = adjustedTerm != null ? adjustedTerm : origTerm
+
+      const amountDiffs = adjustedAmount != null && adjustedAmount !== origAmount
+      const termDiffs = adjustedTerm != null && adjustedTerm !== origTerm
+
+      if (amountDiffs || termDiffs) {
+        const { data: updated, error: updateErr } = await supabase
+          .from('applications')
+          .update({
+            status: 'pending_sa_confirmation',
+            approver_proposed_amount: proposedAmount,
+            approver_proposed_term: proposedTerm,
+            approver_proposed_at: new Date().toISOString(),
+            approver_proposed_by: req.user?.id?.length === 36 ? req.user.id : null,
+            sa_rejection_note: null,
+            sa_rejection_at: null,
+            sa_rejection_by: null
+          })
+          .eq('id', req.params.id)
+          .select()
+          .single()
+
+        if (updateErr) throw updateErr
+
+        return res.json({
+          status: 'pending_sa_confirmation',
+          approver_proposed_amount: updated.approver_proposed_amount,
+          approver_proposed_term: updated.approver_proposed_term,
+          message: 'Adjusted terms recorded — awaiting SA confirmation.'
+        })
+      }
+      // No actual diff — fall through to direct approval.
+    }
+
     const { transitionStage } = require('../services/pipeline')
-    const updated = await transitionStage(req.params.id, 'loan_processing_officer', req.user, {})
-    return res.json({ status: 'approved', borrowerId: updated.loandisk_borrower_id })
+    const meta = {
+      interest_rate: req.body?.interest_rate,
+      payment_scheme_id: req.body?.payment_scheme_id,
+      discount_reason: req.body?.discount_reason
+    }
+    const updated = await transitionStage(req.params.id, 'loan_processing_officer', req.user, meta)
+    return res.json({
+      status: 'approved',
+      borrowerId: updated.loandisk_borrower_id,
+      loanId: updated.loandisk_loan_id,
+      fees: {
+        service_fee: updated.service_fee_amount,
+        insurance_fee: updated.insurance_fee_amount,
+        total_fees: updated.total_fees_amount,
+        net_disbursement: updated.net_disbursement_amount
+      }
+    })
   } catch (error) {
     console.error('Approve error:', error.message)
+    return res.status(400).json({ error: error.message })
+  }
+})
+
+// Confirm proposed adjusted terms — SA-only.
+// Reads the persisted approver_proposed_amount/term, runs the deferred
+// Loandisk push with those values, and advances the stage.
+router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admin'), async (req, res) => {
+  try {
+    const { data: current, error: fetchErr } = await supabase
+      .from('applications')
+      .select('*')
+      .eq('id', req.params.id)
+      .single()
+
+    if (fetchErr || !current) {
+      return res.status(404).json({ error: 'Application not found' })
+    }
+
+    if (current.status !== 'pending_sa_confirmation') {
+      return res.status(400).json({ error: 'Application is not awaiting SA confirmation' })
+    }
+
+    if (current.approver_proposed_amount == null || current.approver_proposed_term == null) {
+      return res.status(400).json({ error: 'No proposed terms recorded on this application' })
+    }
+
+    const { transitionStage } = require('../services/pipeline')
+    const meta = {
+      principal: current.approver_proposed_amount,
+      duration_months: current.approver_proposed_term,
+      interest_rate: req.body?.interest_rate,
+      payment_scheme_id: req.body?.payment_scheme_id,
+      discount_reason: req.body?.discount_reason
+    }
+
+    // Adopt the proposed values as the official loan_amount / loan_term
+    // before transitioning, so downstream reads see the confirmed numbers.
+    await supabase
+      .from('applications')
+      .update({
+        loan_amount: current.approver_proposed_amount,
+        loan_term: current.approver_proposed_term
+      })
+      .eq('id', req.params.id)
+
+    const updated = await transitionStage(req.params.id, 'loan_processing_officer', req.user, meta)
+    return res.json(updated)
+  } catch (error) {
+    console.error('Confirm-terms error:', error.message)
+    return res.status(400).json({ error: error.message })
+  }
+})
+
+// Reject proposed adjusted terms — SA-only.
+// Body: { note: string } (required, non-empty).
+// Resets status back to `pending` with stage `approver` so the approver can
+// re-review. Stores the note + timestamp + actor for the activity log.
+router.patch('/applications/:id/reject-terms', requireRole('admin', 'super_admin'), async (req, res) => {
+  try {
+    const note = String(req.body?.note || '').trim()
+    if (!note) {
+      return res.status(400).json({ error: 'note is required' })
+    }
+
+    const { data: current, error: fetchErr } = await supabase
+      .from('applications')
+      .select('id, status, stage_history')
+      .eq('id', req.params.id)
+      .single()
+
+    if (fetchErr || !current) {
+      return res.status(404).json({ error: 'Application not found' })
+    }
+
+    if (current.status !== 'pending_sa_confirmation') {
+      return res.status(400).json({ error: 'Application is not awaiting SA confirmation' })
+    }
+
+    const history = Array.isArray(current.stage_history) ? current.stage_history : []
+    const rejectionEntry = {
+      type: 'sa_rejection',
+      by: req.user?.id || null,
+      by_name: req.user?.full_name || null,
+      at: new Date().toISOString(),
+      meta: { note }
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('applications')
+      .update({
+        status: 'pending',
+        stage: 'approver',
+        approver_proposed_amount: null,
+        approver_proposed_term: null,
+        approver_proposed_at: null,
+        approver_proposed_by: null,
+        sa_rejection_note: note,
+        sa_rejection_at: new Date().toISOString(),
+        sa_rejection_by: req.user?.id?.length === 36 ? req.user.id : null,
+        stage_history: [...history, rejectionEntry]
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (updateErr) throw updateErr
+    return res.json(updated)
+  } catch (error) {
+    console.error('Reject-terms error:', error.message)
     return res.status(400).json({ error: error.message })
   }
 })
