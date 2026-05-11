@@ -185,7 +185,7 @@ router.get('/applications/phone/:phone', async (req, res) => {
 })
 
 // Submit CI score and calculate final score + tier
-router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', 'ci_officer'), async (req, res) => {
+router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', 'ci_officer', 'approver'), async (req, res) => {
   try {
     const {
       ci_score, notes, reviewed_by,
@@ -261,7 +261,7 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
 //   adjusted_amount, adjusted_term — when either differs from the original
 //   loan_amount/loan_term, status flips to `pending_sa_confirmation` and the
 //   Loandisk push is deferred until the SA confirms via /confirm-terms.
-router.patch('/applications/:id/approve', requireRole('admin', 'super_admin'), async (req, res) => {
+router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     const adjustedAmount = req.body?.adjusted_amount != null ? Number(req.body.adjusted_amount) : null
     const adjustedTerm = req.body?.adjusted_term != null ? Number(req.body.adjusted_term) : null
@@ -342,7 +342,7 @@ router.patch('/applications/:id/approve', requireRole('admin', 'super_admin'), a
 // Confirm proposed adjusted terms — SA-only.
 // Reads the persisted approver_proposed_amount/term, runs the deferred
 // Loandisk push with those values, and advances the stage.
-router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admin'), async (req, res) => {
+router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     const { data: current, error: fetchErr } = await supabase
       .from('applications')
@@ -393,7 +393,7 @@ router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admi
 // Body: { note: string } (required, non-empty).
 // Resets status back to `pending` with stage `approver` so the approver can
 // re-review. Stores the note + timestamp + actor for the activity log.
-router.patch('/applications/:id/reject-terms', requireRole('admin', 'super_admin'), async (req, res) => {
+router.patch('/applications/:id/reject-terms', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     const note = String(req.body?.note || '').trim()
     if (!note) {
@@ -450,7 +450,7 @@ router.patch('/applications/:id/reject-terms', requireRole('admin', 'super_admin
 })
 
 // Export consent report as CSV
-router.get('/export/consent', requireRole('admin', 'super_admin'), async (req, res) => {
+router.get('/export/consent', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('applications')
@@ -501,7 +501,7 @@ router.get('/export/consent', requireRole('admin', 'super_admin'), async (req, r
 
 // Decline application — DEPRECATED: use PATCH /api/pipeline/:id/transition { to_stage: 'declined', meta: { decline_reason } }
 // Kept as a convenience wrapper that delegates to the pipeline transition.
-router.patch('/applications/:id/decline', requireRole('admin', 'super_admin'), async (req, res) => {
+router.patch('/applications/:id/decline', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     const { transitionStage } = require('../services/pipeline')
     const { notes } = req.body

@@ -61,7 +61,7 @@ router.get('/:id/history', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.patch(
   '/:id/assign-sales-officer',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'approver'),
   async (req, res) => {
     try {
       const { sales_officer_id } = req.body;
