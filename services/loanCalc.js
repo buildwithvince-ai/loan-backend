@@ -8,6 +8,7 @@ const {
   LOAN_DEFAULTS,
   FEE_CONFIG,
   getProductConfig,
+  getDefaultInterestRate,
   normalizeLoanType,
 } = require('../config/loanProducts');
 
@@ -124,10 +125,13 @@ function validateLoanInputs(input) {
     errors.push(`interest_rate must be between ${LOAN_DEFAULTS.min_interest_rate} and ${LOAN_DEFAULTS.max_interest_rate}`);
   }
 
-  // Discount reason required when rate is below default (5).
-  if (Number.isFinite(r) && r < LOAN_DEFAULTS.interest_rate) {
+  // Discount reason required when rate is below the per-loan-type default
+  // (Personal 3.5, SME 3.0, AKAP 4.0, Group/SBL 5.0). Falls back to
+  // LOAN_DEFAULTS.interest_rate for unrecognised loan types.
+  const typeDefault = getDefaultInterestRate(loan_type);
+  if (Number.isFinite(r) && r < typeDefault) {
     if (!discount_reason || !String(discount_reason).trim()) {
-      errors.push('discount_reason is required when interest_rate is below default');
+      errors.push(`discount_reason is required when interest_rate is below the ${normalizeLoanType(loan_type)} default (${typeDefault}%)`);
     }
   }
 

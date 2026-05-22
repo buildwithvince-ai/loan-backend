@@ -3,7 +3,7 @@
 const { supabase } = require('./supabase');
 const { createBorrower, createLoan, uploadAllFiles } = require('./loandisk');
 const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
-const { getProductConfig, LOAN_DEFAULTS } = require('../config/loanProducts');
+const { getProductConfig, getDefaultInterestRate, LOAN_DEFAULTS } = require('../config/loanProducts');
 
 const VALID_STAGES = [
   'sales_officer',
@@ -56,14 +56,18 @@ async function executeLoandiskApproval(application, user, meta = {}) {
   // values on the row, then the persisted loan_amount/loan_term.
   const principal = Number(meta.principal ?? fullApp.approver_proposed_amount ?? fullApp.loan_amount);
   const duration_months = Number(meta.duration_months ?? fullApp.approver_proposed_term ?? fullApp.loan_term);
-  const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : LOAN_DEFAULTS.interest_rate;
+  // Per-loan-type default interest rate (Personal 3.5, SME 3.0, AKAP 4.0,
+  // Group/SBL 5.0). Overridable when approver passes meta.interest_rate.
+  const defaultRate = getDefaultInterestRate(fullApp.loan_type);
+  const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
   const payment_scheme_id = meta.payment_scheme_id != null
     ? Number(meta.payment_scheme_id)
     : productCfg.default_payment_scheme;
   const discount_reason = meta.discount_reason || null;
 
-  if (interest_rate < LOAN_DEFAULTS.interest_rate && !discount_reason) {
-    throw new Error('discount_reason is required when interest_rate is below the default');
+  // Discount gate: rate below the per-type default requires a documented reason.
+  if (interest_rate < defaultRate && !discount_reason) {
+    throw new Error(`discount_reason is required when interest_rate is below the ${fullApp.loan_type} default (${defaultRate}%)`);
   }
 
   // Renewal reuse: use linked Loandisk borrower id when present and skip

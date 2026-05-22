@@ -5,8 +5,26 @@ const {
   FEE_CONFIG,
   DISBURSEMENT,
   getProductConfig,
+  getDefaultInterestRate,
   normalizeLoanType
 } = require('../config/loanProducts')
+
+// Loan-type -> Loandisk payment_scheme_id. Authoritative resolver when the
+// caller does not pass an explicit payment_scheme_id. Keys are the lowercased
+// loan_type values used by the frontend.
+//   3    = Monthly
+//   3413 = Semi-monthly (15/30)
+//   4    = Weekly
+// AKAP=4 needs verification against Loandisk's allowed scheme list for the
+// AKAP product (config/loanProducts.js PRODUCT_CONFIG.akap.allowed_payment_schemes).
+// Confirm with ops before relying on AKAP weekly billing in prod.
+const PAYMENT_SCHEME_IDS_BY_LOAN_TYPE = {
+  personal: PAYMENT_SCHEME_IDS.monthly,
+  sme: PAYMENT_SCHEME_IDS.monthly,
+  group: PAYMENT_SCHEME_IDS.monthly,
+  sbl: PAYMENT_SCHEME_IDS.monthly,
+  akap: PAYMENT_SCHEME_IDS.weekly // TODO(ops): verify AKAP scheme id
+}
 const {
   calculateRepayments,
   calculateLoanFees,
@@ -427,7 +445,19 @@ function buildLoanPayload(input) {
   const product = getProductConfig(loan_type)
   if (!product) throw new Error(`buildLoanPayload: unknown loan_type ${loan_type}`)
 
-  const num_of_repayments = calculateRepayments(duration_months, payment_scheme_id)
+  // Resolve payment_scheme_id: explicit input wins; otherwise look up by loan_type.
+  // Throw early with a descriptive error if loan_type has no mapping.
+  let resolved_scheme_id = payment_scheme_id != null
+    ? Number(payment_scheme_id)
+    : PAYMENT_SCHEME_IDS_BY_LOAN_TYPE[normalizeLoanType(loan_type)]
+  if (resolved_scheme_id == null || !Number.isFinite(resolved_scheme_id)) {
+    throw new Error(
+      `buildLoanPayload: no payment_scheme_id resolvable for loan_type "${loan_type}". ` +
+      `Provide payment_scheme_id explicitly or add a mapping in PAYMENT_SCHEME_IDS_BY_LOAN_TYPE.`
+    )
+  }
+
+  const num_of_repayments = calculateRepayments(duration_months, resolved_scheme_id)
   const fees = calculateLoanFees(principal)
   const totalInterest = calculateTotalInterest(principal, interest_rate, duration_months)
 
@@ -446,6 +476,10 @@ function buildLoanPayload(input) {
     loan_application_id: loan_application_id || `GR8-${Date.now()}`,
     loan_disbursed_by_id: disbursedById(),
     loan_principal_amount: Number(principal).toFixed(2),
+    // INTENTIONAL (confirmed by ops 2026-05): loan_released_date defaults to
+    // the approval date when no release_date is supplied. Loandisk auto-
+    // populates release-date = approval-date on its end; we mirror that here
+    // so the value is explicit in the payload. Do not change without ops sign-off.
     loan_released_date: released_date || formatMMDDYYYY(new Date()),
     loan_interest_method: LOAN_DEFAULTS.interest_method,
     loan_interest_type: LOAN_DEFAULTS.interest_type,
@@ -453,7 +487,7 @@ function buildLoanPayload(input) {
     loan_interest: Number(interest_rate),
     loan_duration_period: LOAN_DEFAULTS.duration_period,
     loan_duration: Number(duration_months),
-    loan_payment_scheme_id: Number(payment_scheme_id),
+    loan_payment_scheme_id: resolved_scheme_id,
     loan_num_of_repayments: num_of_repayments,
     loan_decimal_places: LOAN_DEFAULTS.decimal_places,
     // Fees: send rate as a percentage (Loandisk's `loan_fee_id_<id>` accepts
@@ -482,13 +516,16 @@ async function createLoan(input) {
 
   const { payload, fees, num_of_repayments, total_interest } = buildLoanPayload(input)
 
-  // Discount audit log
-  if (Number(input.interest_rate) < LOAN_DEFAULTS.interest_rate) {
+  // Discount audit log — compare against the per-loan-type default, not the
+  // global LOAN_DEFAULTS.interest_rate, so loans approved at their type default
+  // (e.g. Personal=3.5) don't get falsely flagged as discounted.
+  const defaultRateForType = getDefaultInterestRate(input.loan_type)
+  if (Number.isFinite(defaultRateForType) && Number(input.interest_rate) < defaultRateForType) {
     console.log('[loandisk:createLoan] discount applied', {
       borrower_id: input.borrower_id,
       loan_application_id: payload.loan_application_id,
       approved_rate: input.interest_rate,
-      default_rate: LOAN_DEFAULTS.interest_rate,
+      default_rate: defaultRateForType,
       reason: input.discount_reason,
       approver_id: input.approver_id || null
     })

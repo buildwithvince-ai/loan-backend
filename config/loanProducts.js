@@ -42,7 +42,20 @@ const PRODUCT_CONFIG = {
   },
 };
 
+// Per-loan-type default interest rates (% / month). Authoritative source for
+// the approval flow when an approver does not override the rate. All values
+// stay within LOAN_DEFAULTS.min_interest_rate..max_interest_rate.
+const DEFAULT_INTEREST_RATES = {
+  personal: 3.5,
+  sme: 3.0,
+  akap: 4.0,
+  group: 5.0,
+  sbl: 5.0,
+};
+
 const LOAN_DEFAULTS = {
+  // Legacy fallback rate; per-type defaults in DEFAULT_INTEREST_RATES are
+  // authoritative. Kept as a safety net for unrecognised loan types.
   interest_rate: 5,
   interest_method: 'flat_rate',
   interest_type: 'percentage',
@@ -89,12 +102,20 @@ function getProductConfig(loanType) {
   return PRODUCT_CONFIG[key] || null;
 }
 
+function getDefaultInterestRate(loanType) {
+  const key = normalizeLoanType(loanType);
+  const rate = DEFAULT_INTEREST_RATES[key];
+  return Number.isFinite(rate) ? rate : LOAN_DEFAULTS.interest_rate;
+}
+
 module.exports = {
   PAYMENT_SCHEME_IDS,
   PRODUCT_CONFIG,
   LOAN_DEFAULTS,
+  DEFAULT_INTEREST_RATES,
   FEE_CONFIG,
   DISBURSEMENT,
   normalizeLoanType,
   getProductConfig,
+  getDefaultInterestRate,
 };
