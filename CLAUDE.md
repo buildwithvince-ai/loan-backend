@@ -17,7 +17,7 @@ Loan application backend for GR8 Lending Corporation (gr8lendingcorporation.com)
 - Single-member loan applications (Personal, SME, AKAP) via `/submit`
 - Multi-member loan applications (Group, SBL) via `/submit-group` with per-member FinScore
 - FinScore integration with telco detection (Globe=GL1, Smart=Q1, DITO=DT1)
-- JWT auth via Supabase Auth + RBAC with `admin_users` table (roles: super_admin, admin, ci_officer, verifier, approver, sales_officer, encoder)
+- JWT auth via Supabase Auth + RBAC with `admin_users` table (roles: super_admin, admin, ci_officer, verifier, approver, sales_officer, loan_processing_officer)
 - Pipeline stage engine: 6 stages with email automation on transitions
 - Admin dashboard API: list, review, CI scoring, approve/decline, user management
 - CI agent API: limited-access endpoints for credit interviewers
@@ -132,7 +132,7 @@ Age requirement: 21–65 for all types. Mobile format: `09XXXXXXXXX`.
 ## Application Workflow
 
 1. Applicant submits → pre-qual checks → FinScore API call → image compression → files to Supabase Storage → record saved as `pending` → email notifications sent
-2. Pipeline stages: `leads` → `verifier` → `ci_officer` → `approver` → `encoder` → `released` (with email automation on each transition)
+2. Pipeline stages: `sales_officer` → `verifier` → `ci_officer` → `approver` → `loan_processing_officer` (with email automation on each transition). `declined` is a terminal branch from `approver`. Backward returns: only `verifier` → `sales_officer` is permitted.
 3. CI agent conducts interview → submits CI score → auto-advances to approver stage
 4. Admin reviews → final score + tier calculated (with reapplication bonus if applicable)
 5. Admin approves → borrower created in Loandisk → files transferred from Supabase to Loandisk via presigned S3 URLs

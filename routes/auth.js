@@ -83,7 +83,7 @@ router.post('/login', async (req, res) => {
  */
 router.post('/logout', verifyToken, async (req, res) => {
   try {
-    const { error } = await supabase.auth.admin.signOut(req.user.id);
+    const { error } = await supabase.auth.admin.signOut(req.token);
 
     if (error) {
       console.error('[auth] POST /logout signOut error:', error);

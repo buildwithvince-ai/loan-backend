@@ -47,6 +47,7 @@ const verifyToken = async (req, res, next) => {
       return res.status(401).json({ error: 'User account not found or inactive' });
     }
 
+    req.token = token;
     req.user = {
       id: adminUser.id,
       email: adminUser.email,
