@@ -1,5 +1,17 @@
 node_modules/
+
+# Secrets
 .env
 .env.*
-Logs/
+
+# OS cruft
+.DS_Store
 *.DS_Store
+
+# Runtime logs (may contain applicant PII / FinScore payloads)
+Logs/
+
+# Sensitive captured artifacts in docs/ (HAR = headers/tokens, zip = applicant files, logs = PII)
+docs/*.har
+docs/*.zip
+docs/*.log
