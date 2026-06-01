@@ -268,6 +268,10 @@ router.patch('/applications/:id/override', requireRole('admin', 'super_admin', '
       return res.status(400).json({ error: 'override_reason is required' })
     }
 
+    if (String(override_reason).trim().length < 10) {
+      return res.status(400).json({ error: 'override_reason must be at least 10 characters' })
+    }
+
     const { data: app, error: fetchError } = await supabase
       .from('applications')
       .select('finscore_raw, stage_history')
