@@ -32,12 +32,25 @@ const VALID_STAGES = [
 async function executeLoandiskApproval(application, user, meta = {}) {
   const { data: fullApp, error: fetchError } = await supabase
     .from('applications')
-    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, approver_proposed_amount, approver_proposed_term')
+    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, loandisk_loan_id, approver_proposed_amount, approver_proposed_term')
     .eq('id', application.id)
     .single();
 
   if (fetchError) {
     throw new Error('Failed to fetch application data: ' + fetchError.message);
+  }
+
+  // Idempotency: a prior approval already created the Loandisk loan. Skip the
+  // entire side-effect (borrower reuse, file upload, createLoan) to prevent
+  // duplicate loan records when this runs twice (re-approval race, or the
+  // confirm-terms admin route firing after a direct approval).
+  if (fullApp.loandisk_loan_id) {
+    console.log('[pipeline:approve] idempotent skip — Loandisk loan already exists', {
+      application_id: application.id,
+      loandisk_borrower_id: fullApp.loandisk_borrower_id,
+      loandisk_loan_id: fullApp.loandisk_loan_id
+    });
+    return;
   }
 
   const formData = fullApp.form_data;

@@ -254,6 +254,75 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
   }
 })
 
+// Manual override for no-FinScore declines.
+// Restricted to approver/admin/super_admin. Pushes an application that has no
+// usable FinScore back into the approver stage so a human can decide it.
+// Guardrail: this is NOT a low-score escape hatch — if a valid FinScore is
+// present, the request is rejected. Override only applies when finscore_raw
+// is null or 0.
+router.patch('/applications/:id/override', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
+  try {
+    const { override_reason } = req.body
+
+    if (!override_reason || !String(override_reason).trim()) {
+      return res.status(400).json({ error: 'override_reason is required' })
+    }
+
+    const { data: app, error: fetchError } = await supabase
+      .from('applications')
+      .select('finscore_raw, stage_history')
+      .eq('id', req.params.id)
+      .single()
+
+    if (fetchError || !app) {
+      return res.status(404).json({ error: 'Application not found' })
+    }
+
+    // Gate: override is only for a missing FinScore. A present, non-zero score
+    // means the decline came from the score itself — not overridable here.
+    const hasFinScore = app.finscore_raw !== null && Number(app.finscore_raw) !== 0
+    if (hasFinScore) {
+      return res.status(403).json({
+        error: 'Override is only allowed when FinScore is missing (null or 0). This application has a valid FinScore.'
+      })
+    }
+
+    const now = new Date().toISOString()
+    const existingHistory = Array.isArray(app.stage_history) ? app.stage_history : []
+    const historyEntry = {
+      event: 'manual_override',
+      to: 'approver',
+      by: req.user.id,
+      by_name: req.user.full_name,
+      reason: override_reason,
+      at: now
+    }
+
+    const { data, error } = await supabase
+      .from('applications')
+      .update({
+        manual_override: true,
+        override_reason,
+        overridden_by: req.user.id,
+        overridden_at: now,
+        stage: 'approver',
+        status: 'pending',
+        stage_history: [...existingHistory, historyEntry]
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    console.log('[admin:override] applied', { application_id: req.params.id, by: req.user.id })
+    return res.json(data)
+  } catch (error) {
+    console.error('Override error:', error.message)
+    return res.status(500).json({ error: error.message })
+  }
+})
+
 // Approve application.
 // Body fields forwarded to the approval guard:
 //   interest_rate, payment_scheme_id, discount_reason
