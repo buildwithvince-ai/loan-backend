@@ -15,3 +15,7 @@ Logs/
 docs/*.har
 docs/*.zip
 docs/*.log
+
+# Local scratch / personal notes (not project docs)
+BLOCKER.md
+task.md
