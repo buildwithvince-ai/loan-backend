@@ -261,13 +261,28 @@ const TRANSITION_GUARDS = {
     if (!meta || !meta.return_reason) {
       return { allowed: false, reason: 'Return reason is required' };
     }
-    // Increment returned_count
+
+    // Verifier->SO always means a rework return: the verifier needs missing
+    // info/requirements. The SO completes it and re-endorses back to the
+    // verifier for re-check. Track the reason + count so the SO board can
+    // surface "returned for rework" and show what to fix.
+    //
+    // Client-confirmation (the client's go-ahead before final approval) is an
+    // APPROVER-only action via POST /pipeline/:id/so-confirmation — it sets
+    // so_confirmation_sent_at directly and never routes through this transition.
     const currentCount = application.returned_count || 0;
-    await supabase
+    const { error: trackError } = await supabase
       .from('applications')
-      .update({ returned_count: currentCount + 1 })
+      .update({
+        returned_count: currentCount + 1,
+        last_return_reason: meta.return_reason,
+        last_returned_at: new Date().toISOString()
+      })
       .eq('id', application.id);
-    return { allowed: true, reason: 'Returned to sales officer' };
+    if (trackError) {
+      throw new Error('Failed to record rework return: ' + trackError.message);
+    }
+    return { allowed: true, reason: 'Returned to sales officer for rework' };
   },
 
   'approver->declined': async (application, user, meta) => {
@@ -385,9 +400,9 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
     stage_history: updatedHistory
   };
 
-  if (toStage === 'sales_officer' && (meta.so_confirmation_requested === true || meta.so_confirmation_requested === 'true')) {
-    updatePayload.so_confirmation_sent_at = new Date().toISOString();
-  }
+  // Note: client-confirmation (so_confirmation_sent_at) is set only by the
+  // approver-only route POST /pipeline/:id/so-confirmation — never here.
+  // verifier->sales_officer is always a rework return (see the guard above).
 
   if (toStage === 'approver' && meta.so_decision) {
     updatePayload.so_decision = meta.so_decision;
