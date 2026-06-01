@@ -298,12 +298,19 @@ router.patch('/applications/:id/override', requireRole('admin', 'super_admin', '
       at: now
     }
 
+    // overridden_by is a uuid FK to admin_users(id). The x-admin-secret auth
+    // path sets req.user.id = 'admin-secret' (not a uuid), which would fail the
+    // FK/type constraint. Only write it for real JWT users; stage_history still
+    // records the raw actor for audit either way.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const overriddenBy = UUID_RE.test(req.user.id) ? req.user.id : null
+
     const { data, error } = await supabase
       .from('applications')
       .update({
         manual_override: true,
         override_reason,
-        overridden_by: req.user.id,
+        overridden_by: overriddenBy,
         overridden_at: now,
         stage: 'approver',
         status: 'pending',
