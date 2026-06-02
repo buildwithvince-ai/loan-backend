@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyAdminSecretOrToken, requireRole } = require('../middleware/auth')
+const { validateCiRepaymentFields } = require('../services/loanCalc')
 
 router.use(verifyAdminSecretOrToken)
 
@@ -190,8 +191,15 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
     const {
       ci_score, notes, reviewed_by,
       ci_form_data, interviewer, ci_recommendation,
-      ci_remarks, ci_recommended_amount
+      ci_remarks, ci_recommended_amount,
+      payment_frequency, salary_payout_dates, repayment_cycle
     } = req.body
+
+    // Validate repayment scheduling fields (CI stage).
+    const repaymentCheck = validateCiRepaymentFields({ payment_frequency, salary_payout_dates, repayment_cycle })
+    if (!repaymentCheck.valid) {
+      return res.status(400).json({ error: repaymentCheck.errors.join('; ') })
+    }
 
     const { data: app, error: fetchError } = await supabase
       .from('applications')
@@ -230,6 +238,9 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
         ci_recommendation,
         ci_remarks,
         ci_recommended_amount,
+        payment_frequency,
+        salary_payout_dates,
+        repayment_cycle,
         reviewed_at: new Date().toISOString()
       })
       .eq('id', req.params.id)
@@ -345,6 +356,10 @@ router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'a
   try {
     const adjustedAmount = req.body?.adjusted_amount != null ? Number(req.body.adjusted_amount) : null
     const adjustedTerm = req.body?.adjusted_term != null ? Number(req.body.adjusted_term) : null
+    // loan_release_date is required to process approval (enforced at the Loandisk
+    // push chokepoint in executeLoandiskApproval). Persist it on every branch so
+    // it survives the adjusted-terms -> confirm-terms detour.
+    const loanReleaseDate = req.body?.loan_release_date || null
 
     // Diff branch — fetch the row to compare against persisted values.
     if (adjustedAmount != null || adjustedTerm != null) {
@@ -377,7 +392,8 @@ router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'a
             approver_proposed_by: req.user?.id?.length === 36 ? req.user.id : null,
             sa_rejection_note: null,
             sa_rejection_at: null,
-            sa_rejection_by: null
+            sa_rejection_by: null,
+            ...(loanReleaseDate ? { loan_release_date: loanReleaseDate } : {})
           })
           .eq('id', req.params.id)
           .select()
@@ -393,6 +409,16 @@ router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'a
         })
       }
       // No actual diff — fall through to direct approval.
+    }
+
+    // Persist the release date before the transition so the Loandisk push
+    // chokepoint (executeLoandiskApproval) reads it from the row.
+    if (loanReleaseDate) {
+      const { error: relErr } = await supabase
+        .from('applications')
+        .update({ loan_release_date: loanReleaseDate })
+        .eq('id', req.params.id)
+      if (relErr) throw relErr
     }
 
     const { transitionStage } = require('../services/pipeline')
@@ -451,13 +477,17 @@ router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admi
       discount_reason: req.body?.discount_reason
     }
 
-    // Adopt the proposed values as the official loan_amount / loan_term
-    // before transitioning, so downstream reads see the confirmed numbers.
+    // Adopt the proposed values as the official loan_amount / loan_term before
+    // transitioning, so downstream reads see the confirmed numbers. Also accept
+    // a loan_release_date override here (falls back to the one persisted at the
+    // adjusted-terms approve step).
+    const confirmReleaseDate = req.body?.loan_release_date || null
     await supabase
       .from('applications')
       .update({
         loan_amount: current.approver_proposed_amount,
-        loan_term: current.approver_proposed_term
+        loan_term: current.approver_proposed_term,
+        ...(confirmReleaseDate ? { loan_release_date: confirmReleaseDate } : {})
       })
       .eq('id', req.params.id)
 

@@ -229,6 +229,12 @@ const userId = (role) => db.admin_users.find((u) => u.roles.includes(role)).id;
 const authH = (role) => ({ Authorization: `Bearer token:${role}` });
 const adminSecretH = { 'x-admin-secret': 'test-admin-secret' };
 
+// Repayment scheduling fields now required at the CI stage (migration 012).
+// Spread into every ci-score body so the validators pass.
+const REPAY = { payment_frequency: 'two_times', salary_payout_dates: [15, 30], repayment_cycle: '15-30' };
+// loan_release_date required at approval; enforced at the Loandisk push chokepoint.
+const RELEASE_DATE = '2026-06-10';
+
 // ===========================================================================
 // 5. HTTP helpers
 // ===========================================================================
@@ -524,29 +530,36 @@ async function run() {
   {
     // approved: fin 90 + ci 80 → 85.0 → 'approved'
     const aId = await freshAtCI('09190000001', 90);
-    const aRes = await jsonReq('PATCH', `/api/admin/applications/${aId}/ci-score`, { ci_score: 40 }, adminSecretH); // ci 40/50=80
+    const aRes = await jsonReq('PATCH', `/api/admin/applications/${aId}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH); // ci 40/50=80
     check('tier boundary ≥85 → approved', aRes.body.final_score === 85 && aRes.body.tier === 'approved', JSON.stringify({ s: aRes.body.final_score, t: aRes.body.tier }));
     check('ci-score auto-advanced ci_officer→approver', db.applications.find((a) => a.id === aId).stage === 'approver', db.applications.find((a) => a.id === aId).stage);
 
     // tier_b: fin 70 + ci 70 → 70.0 → 'tier_b'
     const bId = await freshAtCI('09190000002', 70);
-    const bRes = await jsonReq('PATCH', `/api/admin/applications/${bId}/ci-score`, { ci_score: 35 }, adminSecretH); // ci 70
+    const bRes = await jsonReq('PATCH', `/api/admin/applications/${bId}/ci-score`, { ci_score: 35, ...REPAY }, adminSecretH); // ci 70
     check('tier boundary ≥70 → tier_b', bRes.body.final_score === 70 && bRes.body.tier === 'tier_b', JSON.stringify({ s: bRes.body.final_score, t: bRes.body.tier }));
 
     // declined: fin 40 + ci 40 → 40 → 'declined'
     const dId = await freshAtCI('09190000003', 40);
-    const dRes = await jsonReq('PATCH', `/api/admin/applications/${dId}/ci-score`, { ci_score: 20 }, adminSecretH); // ci 40
+    const dRes = await jsonReq('PATCH', `/api/admin/applications/${dId}/ci-score`, { ci_score: 20, ...REPAY }, adminSecretH); // ci 40
     check('final < 70 → tier declined', dRes.body.final_score === 40 && dRes.body.tier === 'declined', JSON.stringify({ s: dRes.body.final_score, t: dRes.body.tier }));
 
     // reapplication bonus +10: fin 70 + ci 70 = 70, +10 = 80 → tier_b
     const rId = await freshAtCI('09190000004', 70);
-    const rRes = await jsonReq('PATCH', `/api/admin/applications/${rId}/ci-score`, { ci_score: 35, ci_form_data: { is_reapplication: true } }, adminSecretH);
+    const rRes = await jsonReq('PATCH', `/api/admin/applications/${rId}/ci-score`, { ci_score: 35, ci_form_data: { is_reapplication: true }, ...REPAY }, adminSecretH);
     check('reapplication bonus +10 applied', rRes.body.final_score === 80, JSON.stringify(rRes.body.final_score));
 
     // cap at 100: fin 100 + ci 100 = 100, +10 → capped 100
     const cId = await freshAtCI('09190000005', 100);
-    const cRes = await jsonReq('PATCH', `/api/admin/applications/${cId}/ci-score`, { ci_score: 50, ci_form_data: { is_reapplication: true } }, adminSecretH);
+    const cRes = await jsonReq('PATCH', `/api/admin/applications/${cId}/ci-score`, { ci_score: 50, ci_form_data: { is_reapplication: true }, ...REPAY }, adminSecretH);
     check('final_score capped at 100', cRes.body.final_score === 100, JSON.stringify(cRes.body.final_score));
+
+    // Repayment field validation (CI stage): two_times requires exactly 2 distinct dates.
+    const vId = await freshAtCI('09190000006', 40);
+    const badFreq = await jsonReq('PATCH', `/api/admin/applications/${vId}/ci-score`, { ci_score: 40, payment_frequency: 'two_times', salary_payout_dates: [15], repayment_cycle: '15' }, adminSecretH);
+    check('ci-score bad payout count → 400', badFreq.status === 400 && /exactly 2 salary_payout_dates/.test(badFreq.body.error), JSON.stringify(badFreq.body));
+    const missingCycle = await jsonReq('PATCH', `/api/admin/applications/${vId}/ci-score`, { ci_score: 40, payment_frequency: 'one_time', salary_payout_dates: [15] }, adminSecretH);
+    check('ci-score missing repayment_cycle → 400', missingCycle.status === 400 && /repayment_cycle is required/.test(missingCycle.body.error), JSON.stringify(missingCycle.body));
   }
 
   // -----------------------------------------------------------------------
@@ -559,12 +572,12 @@ async function run() {
     const row = db.applications.find((a) => a.phone === '09191111111' && a.status === 'pending');
     approveId = row.id;
     await transitionStage(approveId, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
-    await jsonReq('PATCH', `/api/admin/applications/${approveId}/ci-score`, { ci_score: 40 }, adminSecretH); // → approver
+    await jsonReq('PATCH', `/api/admin/applications/${approveId}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH); // → approver
 
     const before = db.applications.find((a) => a.id === approveId).stage;
     check('at approver stage before approve', before === 'approver', before);
 
-    const ap = await jsonReq('PATCH', `/api/admin/applications/${approveId}/approve`, {}, authH('approver'));
+    const ap = await jsonReq('PATCH', `/api/admin/applications/${approveId}/approve`, { loan_release_date: RELEASE_DATE }, authH('approver'));
     check('approve → 200 status approved', ap.status === 200 && ap.body.status === 'approved', JSON.stringify(ap.body));
     const after = db.applications.find((a) => a.id === approveId);
     check('reached loan_processing_officer stage', after.stage === 'loan_processing_officer', after.stage);
@@ -576,7 +589,12 @@ async function run() {
     check('createLoan payload: principal 25000', Number(loanInput.principal) === 25000, JSON.stringify(loanInput.principal));
     check('createLoan payload: duration 12', Number(loanInput.duration_months) === 12, JSON.stringify(loanInput.duration_months));
     check('createLoan payload: personal default rate 3.5', Number(loanInput.interest_rate) === 3.5, JSON.stringify(loanInput.interest_rate));
-    check('createLoan payload: default payment scheme 3', Number(loanInput.payment_scheme_id) === 3, JSON.stringify(loanInput.payment_scheme_id));
+    // repayment_cycle '15-30' (2-payout) overrides the product default -> semi-monthly 3413.
+    check('createLoan payload: cycle-derived scheme 3413 (semi-monthly)', Number(loanInput.payment_scheme_id) === 3413, JSON.stringify(loanInput.payment_scheme_id));
+    check('createLoan payload: released_date mm/dd/yyyy', loanInput.released_date === '06/10/2026', String(loanInput.released_date));
+    // release 2026-06-10, cycle 15-30: threshold = 06-25, first snapped payout strictly after = 06-30.
+    check('createLoan payload: first_repayment_date computed', loanInput.first_repayment_date === '2026-06-30', String(loanInput.first_repayment_date));
+    check('first_repayment_date persisted on row', after.first_repayment_date === '2026-06-30', String(after.first_repayment_date));
     check('fee snapshot persisted (net_disbursement)', after.net_disbursement_amount === 25000 - 1250 - 250, String(after.net_disbursement_amount));
   }
 
@@ -589,9 +607,14 @@ async function run() {
     await postForm('/api/application/submit', validForm({ mobile: '09192222222' }));
     const r = db.applications.find((a) => a.phone === '09192222222' && a.status === 'pending');
     await transitionStage(r.id, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
-    await jsonReq('PATCH', `/api/admin/applications/${r.id}/ci-score`, { ci_score: 40 }, adminSecretH);
+    await jsonReq('PATCH', `/api/admin/applications/${r.id}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
 
-    const denied = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { interest_rate: 2.0 }, authH('approver'));
+    // loan_release_date required at the Loandisk push chokepoint.
+    const noRelease = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, {}, authH('approver'));
+    check('approve without loan_release_date → 400', noRelease.status === 400 && /loan_release_date is required/.test(noRelease.body.error), JSON.stringify(noRelease.body));
+    check('missing-release approval did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
+
+    const denied = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { interest_rate: 2.0, loan_release_date: RELEASE_DATE }, authH('approver'));
     check('rate below default w/o discount_reason → 400', denied.status === 400 && /discount_reason is required/.test(denied.body.error), JSON.stringify(denied.body));
     check('blocked approval did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
     const callsBefore = loandiskCalls.createLoan.length;
@@ -612,8 +635,8 @@ async function run() {
     await postForm('/api/application/submit', validForm({ mobile: '09192223333', loanAmount: '25000', paymentTerm: '12' }));
     const ct = db.applications.find((a) => a.phone === '09192223333' && a.status === 'pending');
     await transitionStage(ct.id, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
-    await jsonReq('PATCH', `/api/admin/applications/${ct.id}/ci-score`, { ci_score: 40 }, adminSecretH);
-    const ctAdj = await jsonReq('PATCH', `/api/admin/applications/${ct.id}/approve`, { adjusted_amount: 30000 }, authH('approver'));
+    await jsonReq('PATCH', `/api/admin/applications/${ct.id}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
+    const ctAdj = await jsonReq('PATCH', `/api/admin/applications/${ct.id}/approve`, { adjusted_amount: 30000, loan_release_date: RELEASE_DATE }, authH('approver'));
     check('confirm-terms setup → pending_sa_confirmation', ctAdj.body.status === 'pending_sa_confirmation', JSON.stringify(ctAdj.body));
     const ctConfirm = await jsonReq('PATCH', `/api/admin/applications/${ct.id}/confirm-terms`, {}, authH('approver'));
     check('confirm-terms → reaches loan_processing_officer', ctConfirm.body.stage === 'loan_processing_officer', JSON.stringify({ st: ctConfirm.body.stage }));
@@ -648,7 +671,7 @@ async function run() {
     await postForm('/api/application/submit', validForm({ mobile: '09194444444' }));
     const r = db.applications.find((a) => a.phone === '09194444444' && a.status === 'pending');
     await transitionStage(r.id, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
-    await jsonReq('PATCH', `/api/admin/applications/${r.id}/ci-score`, { ci_score: 40 }, adminSecretH);
+    await jsonReq('PATCH', `/api/admin/applications/${r.id}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
 
     await expectThrow('decline without reason blocked',
       () => transitionStage(r.id, 'declined', { id: userId('approver'), roles: ['approver'], full_name: 'a' }, {}),
@@ -670,6 +693,16 @@ async function run() {
 
     const ciWrong = await jsonReq('GET', '/api/ci/applications', null, authH('sales_officer'));
     check('CI route with sales_officer role → 403', ciWrong.status === 403, String(ciWrong.status));
+
+    // ci.js (CI-agent route) happy path: validates + stores repayment fields,
+    // and accepts the approver role (Part 6). Distinct route from admin.js.
+    const ciId = await freshAtCI('09190000007', 80);
+    const ciOk = await jsonReq('PATCH', `/api/ci/applications/${ciId}/ci-score`, { ci_score: 40, ...REPAY }, authH('approver'));
+    check('CI-agent route ci-score (approver) → 200', ciOk.status === 200, String(ciOk.status));
+    const ciRow = db.applications.find((a) => a.id === ciId);
+    check('CI-agent route stored repayment_cycle', ciRow.repayment_cycle === '15-30', String(ciRow.repayment_cycle));
+    const ciBad = await jsonReq('PATCH', `/api/ci/applications/${ciId}/ci-score`, { ci_score: 40, payment_frequency: 'two_times', salary_payout_dates: [15, 15], repayment_cycle: '15-15' }, authH('approver'));
+    check('CI-agent route rejects non-distinct dates → 400', ciBad.status === 400 && /distinct/.test(ciBad.body.error), JSON.stringify(ciBad.body));
   }
 
   // -----------------------------------------------------------------------

@@ -1,7 +1,8 @@
 'use strict';
 
 const { supabase } = require('./supabase');
-const { createBorrower, createLoan, uploadAllFiles } = require('./loandisk');
+const { createBorrower, createLoan, uploadAllFiles, schemeIdFromRepaymentCycle, isoToMMDDYYYY } = require('./loandisk');
+const { calculateFirstRepaymentDate } = require('./loanCalc');
 const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
 const { getProductConfig, getDefaultInterestRate, LOAN_DEFAULTS } = require('../config/loanProducts');
 
@@ -32,7 +33,7 @@ const VALID_STAGES = [
 async function executeLoandiskApproval(application, user, meta = {}) {
   const { data: fullApp, error: fetchError } = await supabase
     .from('applications')
-    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, loandisk_loan_id, approver_proposed_amount, approver_proposed_term')
+    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, loandisk_loan_id, approver_proposed_amount, approver_proposed_term, loan_release_date, repayment_cycle')
     .eq('id', application.id)
     .single();
 
@@ -51,6 +52,14 @@ async function executeLoandiskApproval(application, user, meta = {}) {
       loandisk_loan_id: fullApp.loandisk_loan_id
     });
     return;
+  }
+
+  // loan_release_date is required to process an approval. Enforced here at the
+  // single Loandisk push chokepoint so every approval path (direct /approve,
+  // /confirm-terms, direct transition) is covered. Routes accept and persist
+  // it before this runs. Surfaces as a 400 via the approve route.
+  if (!fullApp.loan_release_date) {
+    throw new Error('loan_release_date is required to process approval.');
   }
 
   const formData = fullApp.form_data;
@@ -73,10 +82,31 @@ async function executeLoandiskApproval(application, user, meta = {}) {
   // Group/SBL 5.0). Overridable when approver passes meta.interest_rate.
   const defaultRate = getDefaultInterestRate(fullApp.loan_type);
   const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
+  // Payment scheme precedence: explicit meta override > repayment_cycle-derived
+  // (CI stage) > per-product default. The cycle maps to Loandisk's frequency
+  // (semi-monthly 3413 for 2-payout cycles, monthly 3 for single).
+  const cycleScheme = schemeIdFromRepaymentCycle(fullApp.repayment_cycle);
   const payment_scheme_id = meta.payment_scheme_id != null
     ? Number(meta.payment_scheme_id)
-    : productCfg.default_payment_scheme;
+    : (cycleScheme != null ? cycleScheme : productCfg.default_payment_scheme);
   const discount_reason = meta.discount_reason || null;
+
+  // First repayment date: computed from the persisted release date + cycle when
+  // a cycle is present. Stored back on the row and mapped to Loandisk. When no
+  // cycle exists, leave it unset and let Loandisk apply its default schedule.
+  let firstRepaymentDate = null;
+  if (fullApp.repayment_cycle) {
+    try {
+      firstRepaymentDate = calculateFirstRepaymentDate(fullApp.loan_release_date, fullApp.repayment_cycle);
+    } catch (calcErr) {
+      console.error('[pipeline:approve] first repayment date calc failed', {
+        application_id: application.id,
+        loan_release_date: fullApp.loan_release_date,
+        repayment_cycle: fullApp.repayment_cycle,
+        error: calcErr.message
+      });
+    }
+  }
 
   // Discount gate: rate below the per-type default requires a documented reason.
   if (interest_rate < defaultRate && !discount_reason) {
@@ -139,7 +169,9 @@ async function executeLoandiskApproval(application, user, meta = {}) {
       payment_scheme_id,
       discount_reason,
       loan_application_id: fullApp.reference_id,
-      approver_id: user.id
+      approver_id: user.id,
+      released_date: isoToMMDDYYYY(fullApp.loan_release_date),
+      first_repayment_date: firstRepaymentDate
     });
   } catch (loanErr) {
     console.error('[pipeline:approve] createLoan failed after borrower resolved', {
@@ -164,6 +196,7 @@ async function executeLoandiskApproval(application, user, meta = {}) {
       total_fees_amount: loanResult.fees.total_fees,
       net_disbursement_amount: loanResult.fees.net_disbursement,
       total_interest_amount: loanResult.total_interest,
+      first_repayment_date: firstRepaymentDate,
       loan_released_at: new Date().toISOString(),
       status: 'approved'
     })

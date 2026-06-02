@@ -25,6 +25,48 @@ const PAYMENT_SCHEME_IDS_BY_LOAN_TYPE = {
   sbl: PAYMENT_SCHEME_IDS.monthly,
   akap: PAYMENT_SCHEME_IDS.weekly // TODO(ops): verify AKAP scheme id
 }
+
+// Repayment-cycle string (CI stage) -> Loandisk frequency (payment_scheme_id).
+// Loandisk's "frequency" IS loan_payment_scheme_id. The cycle's specific days
+// (e.g. 10-25) are NOT encoded in the scheme id — they are realized by
+// loan_first_repayment_date. So every 2-payout (hyphenated) cycle maps to the
+// single semi-monthly scheme (3413) and every 1-payout cycle maps to monthly (3).
+//
+// TODO(ops): verify Loandisk does NOT expect distinct scheme IDs per day-pair.
+// Config exposes only one semi-monthly id (semi_monthly_15_30=3413), which
+// implies 3413 + first_repayment_date is sufficient. Confirm before relying on
+// arbitrary day-pairs (10-25, 5-20) in production.
+// KNOWN COLLISION: AKAP allows only weekly (scheme 4) per PRODUCT_CONFIG, so a
+// hyphenated cycle on an AKAP loan resolves to 3413 and will be rejected by
+// validateLoanInputs. AKAP is not expected to use salary-date cycles.
+const REPAYMENT_CYCLE_MAP = {
+  '15': PAYMENT_SCHEME_IDS.monthly,
+  '30': PAYMENT_SCHEME_IDS.monthly,
+  '15-30': PAYMENT_SCHEME_IDS.semi_monthly_15_30,
+  '10-25': PAYMENT_SCHEME_IDS.semi_monthly_15_30,
+  '5-20': PAYMENT_SCHEME_IDS.semi_monthly_15_30
+}
+
+// Resolve a repayment_cycle string to a Loandisk payment_scheme_id. Falls back
+// to deriving from shape (hyphenated => semi-monthly, single => monthly) when
+// the exact cycle isn't in the map. Returns null for an empty/absent cycle.
+function schemeIdFromRepaymentCycle(cycle) {
+  if (cycle == null || String(cycle).trim() === '') return null
+  const key = String(cycle).trim()
+  if (REPAYMENT_CYCLE_MAP[key] != null) return REPAYMENT_CYCLE_MAP[key]
+  return key.includes('-') ? PAYMENT_SCHEME_IDS.semi_monthly_15_30 : PAYMENT_SCHEME_IDS.monthly
+}
+
+// Convert an ISO 'YYYY-MM-DD' (or Date) to Loandisk's mm/dd/yyyy without going
+// through Date parsing for the string case — keeps it timezone-deterministic.
+function isoToMMDDYYYY(value) {
+  if (!value) return ''
+  if (value instanceof Date) return formatMMDDYYYY(value)
+  const s = String(value).slice(0, 10)
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return formatMMDDYYYY(value)
+  return `${m[2]}/${m[3]}/${m[1]}`
+}
 const {
   calculateRepayments,
   calculateLoanFees,
@@ -439,7 +481,8 @@ function buildLoanPayload(input) {
     interest_rate,
     payment_scheme_id,
     loan_application_id,
-    released_date
+    released_date,
+    first_repayment_date
   } = input
 
   const product = getProductConfig(loan_type)
@@ -476,10 +519,11 @@ function buildLoanPayload(input) {
     loan_application_id: loan_application_id || `GR8-${Date.now()}`,
     loan_disbursed_by_id: disbursedById(),
     loan_principal_amount: Number(principal).toFixed(2),
-    // INTENTIONAL (confirmed by ops 2026-05): loan_released_date defaults to
-    // the approval date when no release_date is supplied. Loandisk auto-
-    // populates release-date = approval-date on its end; we mirror that here
-    // so the value is explicit in the payload. Do not change without ops sign-off.
+    // loan_released_date is now caller-supplied: the approver provides
+    // loan_release_date (required at approval), passed in here as released_date
+    // in mm/dd/yyyy. Falls back to today only as a safety net — in practice the
+    // chokepoint (executeLoandiskApproval) rejects a missing release date before
+    // this runs, so the fallback should not be reached in the approval flow.
     loan_released_date: released_date || formatMMDDYYYY(new Date()),
     loan_interest_method: LOAN_DEFAULTS.interest_method,
     loan_interest_type: LOAN_DEFAULTS.interest_type,
@@ -497,6 +541,13 @@ function buildLoanPayload(input) {
     [`loan_fee_schedule_${serviceFeeId}`]: feeSchedule,
     [`loan_fee_id_${insuranceFeeId}`]: (FEE_CONFIG.insurance_fee_rate * 100).toFixed(2),
     [`loan_fee_schedule_${insuranceFeeId}`]: feeSchedule
+  }
+
+  // First repayment date (Loandisk field loan_first_repayment_date, mm/dd/yyyy,
+  // Optional per API doc p.20). Computed upstream from release date + cycle.
+  // Omitted when absent so Loandisk applies its own default schedule.
+  if (first_repayment_date) {
+    payload.loan_first_repayment_date = isoToMMDDYYYY(first_repayment_date)
   }
 
   return { payload, fees, num_of_repayments, total_interest: totalInterest }
@@ -560,5 +611,8 @@ module.exports = {
   buildBorrowerPayload,
   buildLoanPayload,
   createLoan,
-  MIDDLE_NAME_STRATEGY
+  MIDDLE_NAME_STRATEGY,
+  REPAYMENT_CYCLE_MAP,
+  schemeIdFromRepaymentCycle,
+  isoToMMDDYYYY
 }

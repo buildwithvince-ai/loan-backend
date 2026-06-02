@@ -145,9 +145,113 @@ function validateLoanInputs(input) {
   return { valid: errors.length === 0, errors };
 }
 
+// ---------------------------------------------------------------------------
+// calculateFirstRepaymentDate
+// Given a loan release date and a repayment cycle string, return the first
+// repayment date as an ISO 'YYYY-MM-DD' string.
+//
+//   loanReleaseDate : Date | 'YYYY-MM-DD' (Postgres `date` reads back as ISO)
+//   repaymentCycle  : '15' (single payout) or '15-30' (two payouts)
+//
+// Algorithm (per spec):
+//   1. thresholdDate = releaseDate + 15 days.
+//   2. Walk months forward from the release month; for each month iterate the
+//      payout days ascending, snapping each to the month's last valid day
+//      (EOM rule: Math.min(payoutDay, lastDayOfMonth) — payout 31 in Feb = 28/29).
+//   3. Return the first snapped date STRICTLY AFTER the threshold.
+//
+// All date math uses UTC parts so the result is deterministic regardless of
+// host timezone (Railway runs UTC; this stays correct off-UTC too).
+// ---------------------------------------------------------------------------
+function calculateFirstRepaymentDate(loanReleaseDate, repaymentCycle) {
+  let y;
+  let m; // 0-based month
+  let d;
+  if (loanReleaseDate instanceof Date) {
+    if (Number.isNaN(loanReleaseDate.getTime())) {
+      throw new Error('calculateFirstRepaymentDate: invalid loanReleaseDate');
+    }
+    y = loanReleaseDate.getUTCFullYear();
+    m = loanReleaseDate.getUTCMonth();
+    d = loanReleaseDate.getUTCDate();
+  } else {
+    const parts = String(loanReleaseDate || '').slice(0, 10).split('-').map(Number);
+    if (parts.length < 3 || parts.some((n) => !Number.isFinite(n))) {
+      throw new Error(`calculateFirstRepaymentDate: invalid loanReleaseDate "${loanReleaseDate}"`);
+    }
+    [y, m, d] = [parts[0], parts[1] - 1, parts[2]];
+  }
+
+  const payoutDates = String(repaymentCycle || '')
+    .split('-')
+    .map((x) => parseInt(x, 10))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 31)
+    .sort((a, b) => a - b);
+  if (payoutDates.length === 0) {
+    throw new Error(`calculateFirstRepaymentDate: invalid repaymentCycle "${repaymentCycle}"`);
+  }
+
+  const threshold = new Date(Date.UTC(y, m, d + 15)); // release + 15 days
+
+  let cy = y;
+  let cm = m;
+  for (let i = 0; i < 24; i += 1) {
+    const lastDayOfMonth = new Date(Date.UTC(cy, cm + 1, 0)).getUTCDate();
+    for (const payoutDate of payoutDates) {
+      const snapped = Math.min(payoutDate, lastDayOfMonth);
+      const candidate = new Date(Date.UTC(cy, cm, snapped));
+      if (candidate.getTime() > threshold.getTime()) {
+        return candidate.toISOString().slice(0, 10);
+      }
+    }
+    cm += 1;
+    if (cm > 11) { cm = 0; cy += 1; }
+  }
+
+  throw new Error('calculateFirstRepaymentDate: no valid repayment date found within 24 months');
+}
+
+// ---------------------------------------------------------------------------
+// validateCiRepaymentFields
+// Validates the CI-stage repayment inputs. Returns { valid, errors }.
+//   - payment_frequency must be 'one_time' | 'two_times'
+//   - salary_payout_dates: integers 1-31; exactly 1 for one_time,
+//     exactly 2 distinct for two_times
+//   - repayment_cycle present and non-empty
+// ---------------------------------------------------------------------------
+function validateCiRepaymentFields(input) {
+  const errors = [];
+  const { payment_frequency, salary_payout_dates, repayment_cycle } = input || {};
+
+  if (!['one_time', 'two_times'].includes(payment_frequency)) {
+    errors.push('payment_frequency must be "one_time" or "two_times"');
+  }
+
+  const dates = Array.isArray(salary_payout_dates) ? salary_payout_dates.map(Number) : null;
+  if (!dates || dates.some((n) => !Number.isInteger(n) || n < 1 || n > 31)) {
+    errors.push('salary_payout_dates must be an array of integers between 1 and 31');
+  } else if (payment_frequency === 'one_time' && dates.length !== 1) {
+    errors.push('payment_frequency "one_time" requires exactly 1 salary_payout_date');
+  } else if (payment_frequency === 'two_times') {
+    if (dates.length !== 2) {
+      errors.push('payment_frequency "two_times" requires exactly 2 salary_payout_dates');
+    } else if (dates[0] === dates[1]) {
+      errors.push('payment_frequency "two_times" requires 2 distinct salary_payout_dates');
+    }
+  }
+
+  if (!repayment_cycle || !String(repayment_cycle).trim()) {
+    errors.push('repayment_cycle is required');
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 module.exports = {
   calculateRepayments,
   calculateLoanFees,
   calculateTotalInterest,
   validateLoanInputs,
+  calculateFirstRepaymentDate,
+  validateCiRepaymentFields,
 };

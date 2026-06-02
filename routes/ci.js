@@ -2,10 +2,11 @@ const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
+const { validateCiRepaymentFields } = require('../services/loanCalc')
 
 const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage'
 
-router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin'))
+router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin', 'approver'))
 
 // List pending applications for CI agents
 router.get('/applications', async (req, res) => {
@@ -48,8 +49,15 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
     const {
       ci_score, notes, reviewed_by,
       ci_form_data, interviewer, ci_recommendation,
-      ci_remarks, ci_recommended_amount
+      ci_remarks, ci_recommended_amount,
+      payment_frequency, salary_payout_dates, repayment_cycle
     } = req.body
+
+    // Validate repayment scheduling fields (CI stage).
+    const repaymentCheck = validateCiRepaymentFields({ payment_frequency, salary_payout_dates, repayment_cycle })
+    if (!repaymentCheck.valid) {
+      return res.status(400).json({ error: repaymentCheck.errors.join('; ') })
+    }
 
     const { data: app, error: fetchError } = await supabase
       .from('applications')
@@ -87,6 +95,9 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
         ci_recommendation,
         ci_remarks,
         ci_recommended_amount,
+        payment_frequency,
+        salary_payout_dates,
+        repayment_cycle,
         reviewed_at: new Date().toISOString()
       })
       .eq('id', req.params.id)
