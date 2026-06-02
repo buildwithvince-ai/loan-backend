@@ -294,6 +294,20 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       : req.body.members
     const files = req.files || []
 
+    // Validate member count BEFORE dereferencing the leader. An empty or
+    // missing members array would otherwise crash on leader.mobile below,
+    // making the per-type minimum checks unreachable (the sbl<1 branch).
+    if (!Array.isArray(members) || members.length === 0) {
+      const minLabel = loanType === 'group' ? 'at least 5 members' : 'at least 1 member'
+      return res.status(200).json({ status: 'declined', reasons: [`This loan requires ${minLabel}`] })
+    }
+    if (loanType === 'group' && members.length < 5) {
+      return res.status(200).json({ status: 'declined', reasons: ['Group Loan requires at least 5 members'] })
+    }
+    if (loanType === 'sbl' && members.length < 1) {
+      return res.status(200).json({ status: 'declined', reasons: ['SBL requires at least 1 member'] })
+    }
+
     // Check for existing pending application with leader's phone
     const leader = members[0]
 
@@ -342,14 +356,6 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     if (priorDeclinedGroup) {
       prior_decline_flag = true
       prior_decline_reference = priorDeclinedGroup.reference_id
-    }
-
-    // Validate member count
-    if (loanType === 'group' && members.length < 5) {
-      return res.status(200).json({ status: 'declined', reasons: ['Group Loan requires at least 5 members'] })
-    }
-    if (loanType === 'sbl' && members.length < 1) {
-      return res.status(200).json({ status: 'declined', reasons: ['SBL requires at least 1 member'] })
     }
 
     const perMemberLimits = {
