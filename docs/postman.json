@@ -1,0 +1,11 @@
+{
+    "error": {
+        "type": "client",
+        "code": "4",
+        "message": "Wrong content type"
+    },
+    "http": {
+        "code": 200,
+        "message": "OK"
+    }
+}
