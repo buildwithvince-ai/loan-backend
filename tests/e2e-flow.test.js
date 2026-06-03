@@ -587,6 +587,49 @@ async function run() {
     const ok = await jsonReq('PATCH', `/api/admin/applications/${sblId}/ci-score`, { ci_score: 40, ...REPAY, honorarium_date: 15 }, adminSecretH);
     check('SBL ci-score with honorarium_date 15 → 200', ok.status === 200, JSON.stringify({ s: ok.status, e: ok.body.error }));
     check('honorarium_date persisted on row', db.applications.find((a) => a.id === sblId).honorarium_date === 15, String(db.applications.find((a) => a.id === sblId).honorarium_date));
+
+    // SBL needs ONLY honorarium_date — no salary_payout_dates / frequency / cycle.
+    const sbl2 = newId();
+    db.applications.push({
+      id: sbl2, reference_id: 'GR8-SBL-HON2', phone: '09196667777',
+      loan_type: 'sbl', status: 'pending', stage: 'ci_officer',
+      finscore_normalized: 80, loan_amount: 30000, loan_term: 12, stage_history: []
+    });
+    const honOnly = await jsonReq('PATCH', `/api/admin/applications/${sbl2}/ci-score`, { ci_score: 40, honorarium_date: 20 }, adminSecretH);
+    check('SBL ci-score with ONLY honorarium_date (no salary fields) → 200', honOnly.status === 200, JSON.stringify({ s: honOnly.status, e: honOnly.body.error }));
+  }
+
+  // -----------------------------------------------------------------------
+  section('FIRST REPAYMENT — per-product calc (services/repayment.js)');
+  // -----------------------------------------------------------------------
+  {
+    const { calculateFirstRepaymentDate: frd } = require('../services/repayment');
+    check('AKAP release+7 (Jun10→Jun17)', frd('2026-06-10', 'akap', null, null) === '2026-06-17', frd('2026-06-10', 'akap', null, null));
+    check('SME +1mo same day (Jun10→Jul10)', frd('2026-06-10', 'sme', null, null) === '2026-07-10', frd('2026-06-10', 'sme', null, null));
+    check('SME EOM (Jan31→Feb28)', frd('2026-01-31', 'sme', null, null) === '2026-02-28', frd('2026-01-31', 'sme', null, null));
+    check('SME EOM leap (Jan31→Feb29)', frd('2028-01-31', 'sme', null, null) === '2028-02-29', frd('2028-01-31', 'sme', null, null));
+    check('PL 15-30 rel18 → Jul15', frd('2026-06-18', 'personal', '15-30', [15, 30]) === '2026-07-15', frd('2026-06-18', 'personal', '15-30', [15, 30]));
+    check('PL 15-30 rel2 (thr 17th) → Jun30', frd('2026-06-02', 'personal', '15-30', [15, 30]) === '2026-06-30', frd('2026-06-02', 'personal', '15-30', [15, 30]));
+    check('PL cycle31 rel20 → Jul31 (EOM)', frd('2026-06-20', 'personal', '31', [31]) === '2026-07-31', frd('2026-06-20', 'personal', '31', [31]));
+    check('SBL honorarium=15 rel10 → Jul15', frd('2026-06-10', 'sbl', null, [15]) === '2026-07-15', frd('2026-06-10', 'sbl', null, [15]));
+  }
+
+  // -----------------------------------------------------------------------
+  section('CI SCORE — AKAP/SME skip salary validation');
+  // -----------------------------------------------------------------------
+  {
+    const skipCases = [['akap', '09197770001'], ['sme', '09197770002']];
+    for (const [lt, phone] of skipCases) {
+      const id = newId();
+      db.applications.push({
+        id, reference_id: `GR8-${lt.toUpperCase()}`, phone,
+        loan_type: lt, status: 'pending', stage: 'ci_officer',
+        finscore_normalized: 80, loan_amount: 30000, loan_term: 12, stage_history: []
+      });
+      // No payment_frequency / salary_payout_dates / repayment_cycle sent.
+      const res = await jsonReq('PATCH', `/api/admin/applications/${id}/ci-score`, { ci_score: 40 }, adminSecretH);
+      check(`${lt} ci-score without salary fields → 200`, res.status === 200, JSON.stringify({ s: res.status, e: res.body.error }));
+    }
   }
 
   // -----------------------------------------------------------------------

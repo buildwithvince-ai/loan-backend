@@ -83,4 +83,8 @@ app.use('/api/reports', reportsRouter)
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
+  // Surface which Loandisk branch this instance writes to — confirm prod locks
+  // onto the live branch and dev/staging onto the test branch.
+  const { branchId } = require('./services/loandisk')
+  console.log(`[loandisk] branch=${branchId()} (NODE_ENV=${process.env.NODE_ENV})`)
 })

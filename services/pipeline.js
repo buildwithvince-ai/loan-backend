@@ -1,8 +1,8 @@
 'use strict';
 
 const { supabase } = require('./supabase');
-const { createBorrower, createLoan, uploadAllFiles, schemeIdFromRepaymentCycle, isoToMMDDYYYY } = require('./loandisk');
-const { calculateFirstRepaymentDate } = require('./loanCalc');
+const { createBorrower, createLoan, uploadAllFiles, schemeIdFromLoanType, isoToMMDDYYYY } = require('./loandisk');
+const { calculateFirstRepaymentDate } = require('./repayment');
 const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
 const { getProductConfig, getDefaultInterestRate, LOAN_DEFAULTS } = require('../config/loanProducts');
 
@@ -33,7 +33,7 @@ const VALID_STAGES = [
 async function executeLoandiskApproval(application, user, meta = {}) {
   const { data: fullApp, error: fetchError } = await supabase
     .from('applications')
-    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, loandisk_loan_id, approver_proposed_amount, approver_proposed_term, loan_release_date, repayment_cycle')
+    .select('form_data, file_metadata, finscore_raw, loan_type, loan_amount, loan_term, reference_id, application_category, linked_borrower_id, loandisk_borrower_id, loandisk_loan_id, approver_proposed_amount, approver_proposed_term, loan_release_date, repayment_cycle, salary_payout_dates, honorarium_date')
     .eq('id', application.id)
     .single();
 
@@ -82,30 +82,39 @@ async function executeLoandiskApproval(application, user, meta = {}) {
   // Group/SBL 5.0). Overridable when approver passes meta.interest_rate.
   const defaultRate = getDefaultInterestRate(fullApp.loan_type);
   const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
-  // Payment scheme precedence: explicit meta override > repayment_cycle-derived
-  // (CI stage) > per-product default. The cycle maps to Loandisk's frequency
-  // (semi-monthly 3413 for 2-payout cycles, monthly 3 for single).
-  const cycleScheme = schemeIdFromRepaymentCycle(fullApp.repayment_cycle);
+  // Payment scheme: keyed off loan_type (confirmed by ops 2026-06-03) — Personal/
+  // Group=semi-monthly(3413), SME/SBL=monthly(3), AKAP=weekly(4). An explicit
+  // meta.payment_scheme_id (approver override) still wins; otherwise fall back to
+  // the per-product config default.
   const payment_scheme_id = meta.payment_scheme_id != null
     ? Number(meta.payment_scheme_id)
-    : (cycleScheme != null ? cycleScheme : productCfg.default_payment_scheme);
+    : (schemeIdFromLoanType(fullApp.loan_type) ?? productCfg.default_payment_scheme);
   const discount_reason = meta.discount_reason || null;
 
-  // First repayment date: computed from the persisted release date + cycle when
-  // a cycle is present. Stored back on the row and mapped to Loandisk. When no
-  // cycle exists, leave it unset and let Loandisk apply its default schedule.
+  // First repayment date: per-product rule (AKAP=release+7, SME=release+1mo,
+  // PL/Group=release+15→salary date, SBL=release+15→honorarium date). SBL snaps
+  // to the honorarium day; PL/Group snap to salary_payout_dates. Stored back on
+  // the row and mapped to Loandisk. On failure, left unset → Loandisk default.
+  const loanTypeKey = String(fullApp.loan_type || '').trim().toLowerCase();
+  const payoutDatesForCalc = loanTypeKey === 'sbl'
+    ? (fullApp.honorarium_date != null ? [fullApp.honorarium_date] : [])
+    : fullApp.salary_payout_dates;
   let firstRepaymentDate = null;
-  if (fullApp.repayment_cycle) {
-    try {
-      firstRepaymentDate = calculateFirstRepaymentDate(fullApp.loan_release_date, fullApp.repayment_cycle);
-    } catch (calcErr) {
-      console.error('[pipeline:approve] first repayment date calc failed', {
-        application_id: application.id,
-        loan_release_date: fullApp.loan_release_date,
-        repayment_cycle: fullApp.repayment_cycle,
-        error: calcErr.message
-      });
-    }
+  try {
+    firstRepaymentDate = calculateFirstRepaymentDate(
+      fullApp.loan_release_date,
+      fullApp.loan_type,
+      fullApp.repayment_cycle,
+      payoutDatesForCalc
+    );
+  } catch (calcErr) {
+    console.error('[pipeline:approve] first repayment date calc failed', {
+      application_id: application.id,
+      loan_type: fullApp.loan_type,
+      loan_release_date: fullApp.loan_release_date,
+      repayment_cycle: fullApp.repayment_cycle,
+      error: calcErr.message
+    });
   }
 
   // Discount gate: rate below the per-type default requires a documented reason.

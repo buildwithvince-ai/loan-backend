@@ -95,7 +95,9 @@ SUPABASE_URL
 SUPABASE_SERVICE_KEY
 LOANDISK_AUTH_CODE        # Basic auth
 LOANDISK_PUBLIC_KEY
-LOANDISK_BRANCH_ID
+LOANDISK_BRANCH_ID        # live branch — used when NODE_ENV=production
+LOANDISK_TEST_BRANCH_ID   # test branch — used when NODE_ENV != production (add to Railway)
+NODE_ENV                  # 'production' selects the live Loandisk branch; else the test branch
 FINSCORE_CLIENT_ID        # username
 FINSCORE_CLIENT_SECRET    # password
 FINSCORE_AUTH_URL          # OAuth2 token endpoint

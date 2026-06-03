@@ -25,6 +25,9 @@ const PRODUCT_CONFIG = {
     allowed_payment_schemes: [3, 3413],
     default_payment_scheme: 3,
   },
+  // Verified against live Loandisk 2026-06-03: product 244329 IS named
+  // "SANGGUNIANG BARANGAY LOAN (SBL)"; 245685 is Group. The ops reference table
+  // had these two reversed — Loandisk's system of record is authoritative.
   sbl: {
     loandisk_product_id: 244329,
     allowed_payment_schemes: [3, 3413],

@@ -15,15 +15,21 @@ const {
 //   3    = Monthly
 //   3413 = Semi-monthly (15/30)
 //   4    = Weekly
-// AKAP=4 needs verification against Loandisk's allowed scheme list for the
-// AKAP product (config/loanProducts.js PRODUCT_CONFIG.akap.allowed_payment_schemes).
-// Confirm with ops before relying on AKAP weekly billing in prod.
+// Scheme is keyed off loan_type (confirmed by ops 2026-06-03), NOT the cycle's
+// day-pair: Personal/Group are always semi-monthly (3413) regardless of the
+// specific days; SME/SBL are monthly (3); AKAP is weekly (4).
 const PAYMENT_SCHEME_IDS_BY_LOAN_TYPE = {
-  personal: PAYMENT_SCHEME_IDS.monthly,
+  personal: PAYMENT_SCHEME_IDS.semi_monthly_15_30,
+  group: PAYMENT_SCHEME_IDS.semi_monthly_15_30,
   sme: PAYMENT_SCHEME_IDS.monthly,
-  group: PAYMENT_SCHEME_IDS.monthly,
   sbl: PAYMENT_SCHEME_IDS.monthly,
-  akap: PAYMENT_SCHEME_IDS.weekly // TODO(ops): verify AKAP scheme id
+  akap: PAYMENT_SCHEME_IDS.weekly
+}
+
+// Resolve a Loandisk payment_scheme_id from loan_type (confirmed authority,
+// ops 2026-06-03). Returns null for an unknown type.
+function schemeIdFromLoanType(loanType) {
+  return PAYMENT_SCHEME_IDS_BY_LOAN_TYPE[normalizeLoanType(loanType)] ?? null
 }
 
 // Repayment-cycle string (CI stage) -> Loandisk frequency (payment_scheme_id).
@@ -103,8 +109,17 @@ const WORKING_STATUS_MAP = {
   Employee: 'Employee'
 }
 
+// Branch switching: production uses the live branch (LOANDISK_BRANCH_ID);
+// any other NODE_ENV uses the test branch (LOANDISK_TEST_BRANCH_ID) so dev /
+// staging runs never write to the live loan book.
+function branchId() {
+  return process.env.NODE_ENV === 'production'
+    ? process.env.LOANDISK_BRANCH_ID
+    : process.env.LOANDISK_TEST_BRANCH_ID
+}
+
 function baseUrl() {
-  return `https://api-main.loandisk.com/${process.env.LOANDISK_PUBLIC_KEY}/${process.env.LOANDISK_BRANCH_ID}`
+  return `https://api-main.loandisk.com/${process.env.LOANDISK_PUBLIC_KEY}/${branchId()}`
 }
 
 function authHeaders() {
@@ -582,6 +597,10 @@ async function createLoan(input) {
     })
   }
 
+  // Release date is set from Approver stage input.
+  // First repayment date calculated via calculateFirstRepaymentDate() per
+  // confirmed ops rules. EOM snapped via Math.min.
+  // Intentional per ops team confirmation 2026-06-03.
   const url = `${baseUrl()}/loan`
   const headers = authHeaders()
   const start = Date.now()
@@ -614,5 +633,7 @@ module.exports = {
   MIDDLE_NAME_STRATEGY,
   REPAYMENT_CYCLE_MAP,
   schemeIdFromRepaymentCycle,
-  isoToMMDDYYYY
+  schemeIdFromLoanType,
+  isoToMMDDYYYY,
+  branchId
 }
