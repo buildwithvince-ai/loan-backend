@@ -218,10 +218,13 @@ function calculateFirstRepaymentDate(loanReleaseDate, repaymentCycle) {
 //   - salary_payout_dates: integers 1-31; exactly 1 for one_time,
 //     exactly 2 distinct for two_times
 //   - repayment_cycle present and non-empty
+//   - honorarium_date: day-of-month integer (1-31), REQUIRED for SBL only.
+//     The SBL first repayment follows this date. Ignored for other products.
+//     Pass loan_type so the SBL-only requirement can be enforced.
 // ---------------------------------------------------------------------------
 function validateCiRepaymentFields(input) {
   const errors = [];
-  const { payment_frequency, salary_payout_dates, repayment_cycle } = input || {};
+  const { payment_frequency, salary_payout_dates, repayment_cycle, honorarium_date, loan_type } = input || {};
 
   if (!['one_time', 'two_times'].includes(payment_frequency)) {
     errors.push('payment_frequency must be "one_time" or "two_times"');
@@ -242,6 +245,14 @@ function validateCiRepaymentFields(input) {
 
   if (!repayment_cycle || !String(repayment_cycle).trim()) {
     errors.push('repayment_cycle is required');
+  }
+
+  // honorarium_date is required for SBL (the SBL first repayment follows it).
+  if (normalizeLoanType(loan_type) === 'sbl') {
+    const hd = Number(honorarium_date);
+    if (!Number.isInteger(hd) || hd < 1 || hd > 31) {
+      errors.push('honorarium_date is required for SBL and must be a day-of-month integer between 1 and 31');
+    }
   }
 
   return { valid: errors.length === 0, errors };

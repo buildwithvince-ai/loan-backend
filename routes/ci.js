@@ -50,22 +50,24 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
       ci_score, notes, reviewed_by,
       ci_form_data, interviewer, ci_recommendation,
       ci_remarks, ci_recommended_amount,
-      payment_frequency, salary_payout_dates, repayment_cycle
+      payment_frequency, salary_payout_dates, repayment_cycle, honorarium_date
     } = req.body
 
-    // Validate repayment scheduling fields (CI stage).
-    const repaymentCheck = validateCiRepaymentFields({ payment_frequency, salary_payout_dates, repayment_cycle })
-    if (!repaymentCheck.valid) {
-      return res.status(400).json({ error: repaymentCheck.errors.join('; ') })
-    }
-
+    // Fetch loan_type (authoritative) up front — needed to enforce the SBL-only
+    // honorarium_date requirement, alongside finscore_normalized for scoring.
     const { data: app, error: fetchError } = await supabase
       .from('applications')
-      .select('finscore_normalized')
+      .select('finscore_normalized, loan_type')
       .eq('id', req.params.id)
       .single()
 
     if (fetchError) throw fetchError
+
+    // Validate repayment scheduling fields (CI stage).
+    const repaymentCheck = validateCiRepaymentFields({ payment_frequency, salary_payout_dates, repayment_cycle, honorarium_date, loan_type: app.loan_type })
+    if (!repaymentCheck.valid) {
+      return res.status(400).json({ error: repaymentCheck.errors.join('; ') })
+    }
 
     const ci_normalized = Math.round((ci_score / 50) * 100)
     const finNorm = app.finscore_normalized || 0
@@ -98,6 +100,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
         payment_frequency,
         salary_payout_dates,
         repayment_cycle,
+        honorarium_date,
         reviewed_at: new Date().toISOString()
       })
       .eq('id', req.params.id)

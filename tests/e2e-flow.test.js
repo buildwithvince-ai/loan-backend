@@ -563,6 +563,33 @@ async function run() {
   }
 
   // -----------------------------------------------------------------------
+  section('CI SCORE — SBL honorarium_date requirement');
+  // -----------------------------------------------------------------------
+  {
+    // SBL row parked at ci_officer (SBL apps originate from /submit-group; push
+    // a representative row directly to isolate the honorarium_date validation).
+    const sblId = newId();
+    db.applications.push({
+      id: sblId, reference_id: 'GR8-SBL-HON', phone: '09196666666',
+      loan_type: 'sbl', status: 'pending', stage: 'ci_officer',
+      finscore_normalized: 80, loan_amount: 30000, loan_term: 12, stage_history: []
+    });
+
+    // SBL without honorarium_date → 400 (required only for SBL)
+    const missing = await jsonReq('PATCH', `/api/admin/applications/${sblId}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
+    check('SBL ci-score without honorarium_date → 400', missing.status === 400 && /honorarium_date is required for SBL/.test(missing.body.error), JSON.stringify(missing.body));
+
+    // out-of-range honorarium_date → 400
+    const bad = await jsonReq('PATCH', `/api/admin/applications/${sblId}/ci-score`, { ci_score: 40, ...REPAY, honorarium_date: 40 }, adminSecretH);
+    check('SBL honorarium_date out of range (40) → 400', bad.status === 400 && /honorarium_date is required for SBL/.test(bad.body.error), JSON.stringify(bad.body));
+
+    // valid day-of-month → 200, persisted
+    const ok = await jsonReq('PATCH', `/api/admin/applications/${sblId}/ci-score`, { ci_score: 40, ...REPAY, honorarium_date: 15 }, adminSecretH);
+    check('SBL ci-score with honorarium_date 15 → 200', ok.status === 200, JSON.stringify({ s: ok.status, e: ok.body.error }));
+    check('honorarium_date persisted on row', db.applications.find((a) => a.id === sblId).honorarium_date === 15, String(db.applications.find((a) => a.id === sblId).honorarium_date));
+  }
+
+  // -----------------------------------------------------------------------
   section('APPROVE — reaches LPO, Loandisk payload asserted (CUT before real call)');
   // -----------------------------------------------------------------------
   let approveId;
