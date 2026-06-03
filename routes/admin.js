@@ -354,6 +354,50 @@ router.patch('/applications/:id/override', requireRole('admin', 'super_admin', '
 //   Loandisk push is deferred until the SA confirms via /confirm-terms.
 router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
+    // Supervisor-override gate for auto-declined applications.
+    // An app whose scoring engine tier resolved to 'declined' (final_score < 70)
+    // sits at the approver stage awaiting a human decision. Approving it is a
+    // supervisor-only action requiring an explicit override flag.
+    //
+    // The gate keys off the persisted `tier`, NOT the presence of `override`.
+    // Keying off the flag would let a caller omit it and approve the declined
+    // app through the normal path — the flag would gate nothing. Runs before the
+    // adjusted-terms and direct-approval branches so neither can move a declined
+    // app forward unguarded. Supervisor roles = super_admin, approver (admin is
+    // intentionally excluded from override; admin retains normal approve rights).
+    const { data: gateRow, error: gateErr } = await supabase
+      .from('applications')
+      .select('tier, status')
+      .eq('id', req.params.id)
+      .single()
+    if (gateErr || !gateRow) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Application not found' } })
+    }
+    if (gateRow.tier === 'declined') {
+      const SUPERVISOR_ROLES = ['super_admin', 'approver']
+      const userRoles = req.user?.roles || []
+      const isSupervisor = SUPERVISOR_ROLES.some((r) => userRoles.includes(r))
+      const overrideRequested = req.body?.override === true
+      if (!overrideRequested || !isSupervisor) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'OVERRIDE_FORBIDDEN',
+            message: 'Approving a declined application requires a supervisor override (super_admin or approver) with override:true.'
+          }
+        })
+      }
+      // No audit table exists yet — log to console per project convention.
+      console.log('[admin:override-approve] applied', {
+        application_id: req.params.id,
+        by: req.user?.id,
+        roles: userRoles,
+        prior_tier: gateRow.tier,
+        prior_status: gateRow.status,
+        at: new Date().toISOString()
+      })
+    }
+
     const adjustedAmount = req.body?.adjusted_amount != null ? Number(req.body.adjusted_amount) : null
     const adjustedTerm = req.body?.adjusted_term != null ? Number(req.body.adjusted_term) : null
     // loan_release_date is required to process approval (enforced at the Loandisk

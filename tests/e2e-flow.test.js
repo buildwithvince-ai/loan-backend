@@ -682,6 +682,35 @@ async function run() {
   }
 
   // -----------------------------------------------------------------------
+  section('APPROVE — declined-tier supervisor override gate');
+  // -----------------------------------------------------------------------
+  {
+    // Build a tier:'declined' app parked at the approver stage.
+    // finNorm 90 + ci 20 (→ci_norm 40): final = 90*.5 + 40*.5 = 65 < 70 → declined.
+    FINSCORE['09195555555'] = { score: 540, normalized: 90, noScore: false };
+    await postForm('/api/application/submit', validForm({ mobile: '09195555555' }));
+    const r = db.applications.find((a) => a.phone === '09195555555' && a.status === 'pending');
+    await transitionStage(r.id, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
+    const ci = await jsonReq('PATCH', `/api/admin/applications/${r.id}/ci-score`, { ci_score: 20, ...REPAY }, adminSecretH);
+    check('setup: tier declined parked at approver', ci.body.tier === 'declined' && db.applications.find((a) => a.id === r.id).stage === 'approver', JSON.stringify({ t: ci.body.tier }));
+
+    // 1. declined + no override flag → 403 OVERRIDE_FORBIDDEN (even for a supervisor)
+    const noOv = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { loan_release_date: RELEASE_DATE }, authH('approver'));
+    check('declined approve w/o override → 403 OVERRIDE_FORBIDDEN', noOv.status === 403 && noOv.body.error?.code === 'OVERRIDE_FORBIDDEN', JSON.stringify(noOv.body));
+    check('blocked declined approve did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
+
+    // 2. declined + override by admin (non-supervisor, intentionally excluded) → 403
+    const adminOv = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { override: true, loan_release_date: RELEASE_DATE }, authH('admin'));
+    check('declined override by admin (non-supervisor) → 403', adminOv.status === 403 && adminOv.body.error?.code === 'OVERRIDE_FORBIDDEN', JSON.stringify(adminOv.body));
+    check('admin override did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
+
+    // 3. declined + override by approver (supervisor) → 200, reaches LPO
+    const supOv = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { override: true, loan_release_date: RELEASE_DATE }, authH('approver'));
+    check('declined override by approver (supervisor) → 200 approved', supOv.status === 200 && supOv.body.status === 'approved', JSON.stringify(supOv.body));
+    check('override approve reached loan_processing_officer', db.applications.find((a) => a.id === r.id).stage === 'loan_processing_officer', db.applications.find((a) => a.id === r.id).stage);
+  }
+
+  // -----------------------------------------------------------------------
   section('AUTH / RBAC');
   // -----------------------------------------------------------------------
   {
