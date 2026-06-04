@@ -91,34 +91,55 @@ function buildSignoff() {
 // Base sender
 // ---------------------------------------------------------------------------
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function sendEmail({ to, subject, htmlBody }) {
-  try {
-    const fromAddress = process.env.ZEPTO_FROM_EMAIL;
-    const fromName = process.env.ZEPTO_FROM_NAME || 'GR8 Lending';
+  const fromAddress = process.env.ZEPTO_FROM_EMAIL;
+  const fromName = process.env.ZEPTO_FROM_NAME || 'GR8 Lending';
 
-    // Resend expects `from` as a single "Name <address>" string, `to` as an
-    // array of address strings, and the HTML field named `html`.
-    const payload = {
-      from: `${fromName} <${fromAddress}>`,
-      to: [to],
-      subject: subject,
-      html: htmlBody,
-    };
+  // Resend expects `from` as a single "Name <address>" string, `to` as an
+  // array of address strings, and the HTML field named `html`.
+  const payload = {
+    from: `${fromName} <${fromAddress}>`,
+    to: [to],
+    subject: subject,
+    html: htmlBody,
+  };
 
-    await axios.post(RESEND_API, payload, {
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-      },
-    });
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+  };
 
-    console.log(`[email] Sent "${subject}" → ${to}`);
-  } catch (err) {
-    const detail = err.response
-      ? `status=${err.response.status} body=${JSON.stringify(err.response.data)}`
-      : err.message;
-    console.error(`[email] Failed to send "${subject}" → ${to}: ${detail}`);
+  // Resend rate-limits at 2 req/sec by default, so a burst (e.g. a team
+  // notification loop) can get HTTP 429s. Retry those a few times, honoring
+  // the Retry-After header when present, before giving up. Any non-429 error
+  // fails immediately. Still silent-fail overall: never throws, so a dropped
+  // email never blocks the pipeline.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      await axios.post(RESEND_API, payload, { headers });
+      console.log(`[email] Sent "${subject}" → ${to}`);
+      return;
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 429 && attempt < MAX_ATTEMPTS) {
+        const retryAfter = Number(err.response?.headers?.['retry-after']);
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : 600 * attempt; // 600ms, 1200ms backoff
+        console.warn(`[email] 429 rate-limited "${subject}" → ${to} — retry ${attempt}/${MAX_ATTEMPTS - 1} in ${waitMs}ms`);
+        await sleep(waitMs);
+        continue;
+      }
+      const detail = err.response
+        ? `status=${status} body=${JSON.stringify(err.response.data)}`
+        : err.message;
+      console.error(`[email] Failed to send "${subject}" → ${to}: ${detail}`);
+      return;
+    }
   }
 }
 
