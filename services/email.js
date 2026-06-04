@@ -19,16 +19,16 @@ function buildEmailWrapper(bodyContent) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GR8 Lending Corporation</title>
 </head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,Helvetica,sans-serif;">
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:'Method','Helvetica Neue',Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:32px 0;">
     <tr>
       <td align="center">
         <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
           <!-- Header -->
           <tr>
-            <td style="background-color:#1a3c6e;padding:24px 32px;">
+            <td style="background-color:#1a2235;padding:24px 32px;border-bottom:3px solid #5cb85c;">
               <p style="margin:0;font-size:20px;font-weight:700;color:#ffffff;letter-spacing:0.5px;">GR8 Lending Corporation</p>
-              <p style="margin:4px 0 0;font-size:12px;color:#a8c0e8;">gr8lendingcorporation.com</p>
+              <p style="margin:4px 0 0;font-size:12px;color:#5cb85c;">gr8lendingcorporation.com</p>
             </td>
           </tr>
           <!-- Body -->
@@ -40,7 +40,7 @@ function buildEmailWrapper(bodyContent) {
           <!-- Footer -->
           <tr>
             <td style="background-color:#f9fafb;border-top:1px solid #e5e7eb;padding:16px 32px;">
-              <p style="margin:0;font-size:11px;color:#9ca3af;text-align:center;">
+              <p style="margin:0;font-size:11px;color:#64748b;text-align:center;">
                 This is an automated notification from GR8 Lending Corporation.<br>
                 Please do not reply to this email.
               </p>
@@ -58,16 +58,16 @@ function buildAppDetails(application) {
   return `
   <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:16px 0;">
     <tr>
-      <td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Applicant:</strong> ${application.full_name || '—'}</td>
+      <td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Applicant:</strong> ${application.full_name || '—'}</td>
     </tr>
     <tr>
-      <td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Loan Type:</strong> ${application.loan_type || '—'}</td>
+      <td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Loan Type:</strong> ${application.loan_type || '—'}</td>
     </tr>
     <tr>
-      <td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Phone:</strong> ${application.phone || '—'}</td>
+      <td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Phone:</strong> ${application.phone || '—'}</td>
     </tr>
     <tr>
-      <td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Reference ID:</strong> ${application.reference_id || '—'}</td>
+      <td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Reference ID:</strong> ${application.reference_id || '—'}</td>
     </tr>
   </table>`.trim();
 }
@@ -76,7 +76,7 @@ function buildDashboardLink() {
   return `
   <p style="margin:24px 0 0;">
     <a href="${DASHBOARD_URL}" target="_blank"
-       style="display:inline-block;background-color:#1a3c6e;color:#ffffff;font-size:14px;
+       style="display:inline-block;background-color:#5cb85c;color:#ffffff;font-size:14px;
               font-weight:600;text-decoration:none;padding:12px 24px;border-radius:6px;">
       Log in to Dashboard
     </a>
@@ -84,7 +84,7 @@ function buildDashboardLink() {
 }
 
 function buildSignoff() {
-  return '<p style="margin:24px 0 0;font-size:14px;color:#374151;">GR8 Lending Corporation</p>';
+  return '<p style="margin:24px 0 0;font-size:14px;color:#1e293b;">GR8 Lending Corporation</p>';
 }
 
 // ---------------------------------------------------------------------------
@@ -152,10 +152,10 @@ async function notifySalesOfficer(soUser, application) {
     const subject = `New Lead Assigned: ${application.reference_id}`;
 
     const body = buildEmailWrapper(`
-      <p style="margin:0 0 16px;font-size:14px;color:#374151;">Hi ${soUser.full_name},</p>
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">A new loan application has been assigned to you.</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">Hi ${soUser.full_name},</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">A new loan application has been assigned to you.</p>
       ${buildAppDetails(application)}
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">Log in to the dashboard to review and process this application.</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">Log in to the dashboard to review and process this application.</p>
       ${buildDashboardLink()}
       ${buildSignoff()}
     `);
@@ -243,10 +243,10 @@ async function notifyTeamByRole(role, application, context) {
     for (const user of users) {
       try {
         const body = buildEmailWrapper(`
-          <p style="margin:0 0 16px;font-size:14px;color:#374151;">${greeting}</p>
-          <p style="margin:0 0 8px;font-size:14px;color:#374151;">${intro}</p>
+          <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">${greeting}</p>
+          <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">${intro}</p>
           ${buildAppDetails(application)}
-          <p style="margin:0 0 8px;font-size:14px;color:#374151;">${cta}</p>
+          <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">${cta}</p>
           ${buildDashboardLink()}
           ${buildSignoff()}
         `);
@@ -270,13 +270,13 @@ async function notifySOReturn(soUser, application, returnReason) {
     const subject = `Application Returned: ${application.reference_id}`;
 
     const body = buildEmailWrapper(`
-      <p style="margin:0 0 16px;font-size:14px;color:#374151;">Hi ${soUser.full_name},</p>
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">The following application has been returned to you for correction or completion.</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">Hi ${soUser.full_name},</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">The following application has been returned to you for correction or completion.</p>
       ${buildAppDetails(application)}
       <div style="margin:16px 0;padding:16px;background-color:#fef3c7;border-left:4px solid #f59e0b;border-radius:4px;">
         <p style="margin:0;font-size:14px;color:#78350f;"><strong>Return Reason:</strong> ${returnReason || 'No reason provided.'}</p>
       </div>
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">Please coordinate with your client and resubmit the required documents.</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">Please coordinate with your client and resubmit the required documents.</p>
       ${buildDashboardLink()}
       ${buildSignoff()}
     `);
@@ -317,10 +317,10 @@ async function notifySODecision(soUser, application, decision) {
     }
 
     const body = buildEmailWrapper(`
-      <p style="margin:0 0 16px;font-size:14px;color:#374151;">Hi ${soUser.full_name},</p>
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">${intro}</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">Hi ${soUser.full_name},</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">${intro}</p>
       ${buildAppDetails(application)}
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">
         ${isApproved
           ? 'The application is now moving to loan processing.'
           : 'The application has been marked as Declined. Please inform your client accordingly.'}
@@ -348,25 +348,25 @@ async function sendSOConfirmationRequest(soUser, application, confirmToken, decl
     const declineUrl = `${BASE_URL}/api/confirm/${declineToken}`;
 
     const body = buildEmailWrapper(`
-      <p style="margin:0 0 16px;font-size:14px;color:#374151;">Hi ${soUser.full_name},</p>
-      <p style="margin:0 0 8px;font-size:14px;color:#374151;">The following application is pending your client's confirmation before final approval. Please coordinate with your client and submit their decision below.</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">Hi ${soUser.full_name},</p>
+      <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">The following application is pending your client's confirmation before final approval. Please coordinate with your client and submit their decision below.</p>
       ${buildAppDetails(application)}
       <div style="margin:24px 0;">
-        <p style="margin:0 0 12px;font-size:13px;color:#6b7280;">Select a response below:</p>
+        <p style="margin:0 0 12px;font-size:13px;color:#64748b;">Select a response below:</p>
         <a href="${confirmUrl}" target="_blank"
-           style="display:inline-block;background-color:#065f46;color:#ffffff;font-size:14px;
+           style="display:inline-block;background-color:#4cad4c;color:#ffffff;font-size:14px;
                   font-weight:600;text-decoration:none;padding:12px 24px;border-radius:6px;
                   margin:0 8px 8px 0;">
           Confirm Proceed
         </a>
         <a href="${declineUrl}" target="_blank"
-           style="display:inline-block;background-color:#dc2626;color:#ffffff;font-size:14px;
+           style="display:inline-block;background-color:#ef4444;color:#ffffff;font-size:14px;
                   font-weight:600;text-decoration:none;padding:12px 24px;border-radius:6px;
                   margin:0 8px 8px 0;">
           Decline
         </a>
       </div>
-      <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;">This link expires in 48 hours and can only be used once.</p>
+      <p style="margin:0 0 8px;font-size:12px;color:#64748b;">This link expires in 48 hours and can only be used once.</p>
       ${buildSignoff()}
     `);
 
@@ -393,15 +393,15 @@ async function notifyApproverSODecision(approverTeam, application, soDecision) {
     for (const approver of approverTeam) {
       try {
         const body = buildEmailWrapper(`
-          <p style="margin:0 0 16px;font-size:14px;color:#374151;">Hi Team,</p>
-          <p style="margin:0 0 8px;font-size:14px;color:#374151;">The Sales Officer has submitted the client's decision for the following application.</p>
+          <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">Hi Team,</p>
+          <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">The Sales Officer has submitted the client's decision for the following application.</p>
           ${buildAppDetails(application)}
           <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:8px 0;">
             <tr>
-              <td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Client Decision:</strong> ${decisionLabel}</td>
+              <td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Client Decision:</strong> ${decisionLabel}</td>
             </tr>
           </table>
-          <p style="margin:0 0 8px;font-size:14px;color:#374151;">Log in to the dashboard to proceed with final approval.</p>
+          <p style="margin:0 0 8px;font-size:14px;color:#1e293b;">Log in to the dashboard to proceed with final approval.</p>
           ${buildDashboardLink()}
           ${buildSignoff()}
         `);
@@ -442,23 +442,23 @@ async function sendProblemReport({ reported_by_name, reported_by_role, page, des
     const subject = `[GR8 Bug Report] ${page} — ${phTime}`;
 
     const screenshotBlock = screenshot_url
-      ? `<a href="${screenshot_url}" target="_blank" style="color:#1a3c6e;text-decoration:underline;">View Screenshot</a>`
+      ? `<a href="${screenshot_url}" target="_blank" style="color:#5cb85c;text-decoration:underline;">View Screenshot</a>`
       : 'None attached';
 
     const body = buildEmailWrapper(`
-      <p style="margin:0 0 16px;font-size:14px;color:#374151;">A problem has been reported by an internal user.</p>
+      <p style="margin:0 0 16px;font-size:14px;color:#1e293b;">A problem has been reported by an internal user.</p>
       <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Reported By:</strong> ${reported_by_name}</td></tr>
-        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Role:</strong> ${reported_by_role}</td></tr>
-        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Page:</strong> ${page}</td></tr>
-        <tr><td style="padding:6px 0;font-size:14px;color:#374151;"><strong>Timestamp:</strong> ${phTime}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Reported By:</strong> ${reported_by_name}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Role:</strong> ${reported_by_role}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Page:</strong> ${page}</td></tr>
+        <tr><td style="padding:6px 0;font-size:14px;color:#1e293b;"><strong>Timestamp:</strong> ${phTime}</td></tr>
       </table>
       <div style="margin:16px 0;padding:16px;background-color:#fef2f2;border-left:4px solid #ef4444;border-radius:4px;">
         <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#991b1b;">Description:</p>
-        <p style="margin:0;font-size:14px;color:#374151;white-space:pre-wrap;">${description}</p>
+        <p style="margin:0;font-size:14px;color:#1e293b;white-space:pre-wrap;">${description}</p>
       </div>
-      <p style="margin:16px 0 0;font-size:14px;color:#374151;"><strong>Screenshot:</strong> ${screenshotBlock}</p>
-      <p style="margin:16px 0 0;font-size:12px;color:#9ca3af;">This report has been logged in the system.</p>
+      <p style="margin:16px 0 0;font-size:14px;color:#1e293b;"><strong>Screenshot:</strong> ${screenshotBlock}</p>
+      <p style="margin:16px 0 0;font-size:12px;color:#64748b;">This report has been logged in the system.</p>
       ${buildSignoff()}
     `);
 
