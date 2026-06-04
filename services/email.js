@@ -3,7 +3,7 @@
 const axios = require('axios');
 const { supabase } = require('./supabase');
 
-const ZEPTOMAIL_API = process.env.ZEPTO_API_URL || 'https://api.zeptomail.com/v1.1/email';
+const RESEND_API = 'https://api.resend.com/emails';
 const DASHBOARD_URL = 'https://gr8lendingcorporation.com/admin';
 
 // ---------------------------------------------------------------------------
@@ -93,27 +93,23 @@ function buildSignoff() {
 
 async function sendEmail({ to, subject, htmlBody }) {
   try {
+    const fromAddress = process.env.ZEPTO_FROM_EMAIL;
+    const fromName = process.env.ZEPTO_FROM_NAME || 'GR8 Lending';
+
+    // Resend expects `from` as a single "Name <address>" string, `to` as an
+    // array of address strings, and the HTML field named `html`.
     const payload = {
-      from: {
-        address: process.env.ZEPTO_FROM_EMAIL,
-        name: process.env.ZEPTO_FROM_NAME || 'GR8 Lending',
-      },
-      to: [
-        {
-          email_address: {
-            address: to,
-          },
-        },
-      ],
+      from: `${fromName} <${fromAddress}>`,
+      to: [to],
       subject: subject,
-      htmlbody: htmlBody,
+      html: htmlBody,
     };
 
-    await axios.post(ZEPTOMAIL_API, payload, {
+    await axios.post(RESEND_API, payload, {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        Authorization: `Zoho-enczapikey ${process.env.ZEPTO_API_TOKEN}`,
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
       },
     });
 
