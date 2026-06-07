@@ -9,6 +9,10 @@ const { verifyToken, requireRole } = require('../middleware/auth');
 // All pipeline routes require a valid auth token
 router.use(verifyToken);
 
+// Roles permitted to read history / KYC file URLs on any application. Blocks
+// tokens with no/unknown role; per-applicant ownership scoping is a follow-up.
+const READ_ROLES = ['super_admin', 'admin', 'approver', 'verifier', 'ci_officer', 'sales_officer', 'loan_processing_officer'];
+
 // ---------------------------------------------------------------------------
 // PATCH /:id/transition
 // Move an application to a new pipeline stage.
@@ -34,7 +38,7 @@ router.patch('/:id/transition', async (req, res) => {
 // GET /:id/history
 // Return the stage_history array for an application.
 // ---------------------------------------------------------------------------
-router.get('/:id/history', async (req, res) => {
+router.get('/:id/history', requireRole(...READ_ROLES), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('applications')
@@ -152,7 +156,7 @@ router.post(
 // Return signed URLs for all uploaded files on an application.
 // URLs expire after 1 hour.
 // ---------------------------------------------------------------------------
-router.get('/:id/files', async (req, res) => {
+router.get('/:id/files', requireRole(...READ_ROLES), async (req, res) => {
   try {
     const { data: app, error } = await supabase
       .from('applications')

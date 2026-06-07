@@ -118,7 +118,13 @@ async function run() {
     const ciRes = await fetch(BASE + `/api/admin/applications/${createdId}/ci-score`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'x-admin-secret': ADMIN_SECRET },
-      body: JSON.stringify({ ci_score: 40 }),
+      // Personal loan_type → repayment fields required by validateCiRepaymentFields.
+      body: JSON.stringify({
+        ci_score: 40,
+        payment_frequency: 'one_time',
+        salary_payout_dates: [15],
+        repayment_cycle: 'monthly',
+      }),
     });
     const ciBody = await ciRes.json().catch(() => ({}));
     check('ci-score UPDATE accepted by real schema', ciRes.status === 200 && ciBody.final_score === 80 && ciBody.tier === 'tier_b', JSON.stringify(ciBody).slice(0, 200));

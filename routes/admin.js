@@ -1,13 +1,23 @@
 const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
-const { verifyAdminSecretOrToken, requireRole } = require('../middleware/auth')
+const { verifyToken, requireRole } = require('../middleware/auth')
 const { validateCiRepaymentFields } = require('../services/loanCalc')
 
-router.use(verifyAdminSecretOrToken)
+// Per-user Supabase JWT only. The previous x-admin-secret bypass minted a
+// synthetic super_admin from a shared secret that ships in the frontend
+// bundle (VITE_ADMIN_SECRET) — anyone loading the dashboard could extract it
+// and gain irrevocable full admin. The dashboard already obtains a per-user
+// JWT at /login; use that exclusively.
+router.use(verifyToken)
 
-// List all applications (all authenticated users)
-router.get('/applications', async (req, res) => {
+// Roles permitted to read application records / KYC file URLs. Mutations keep
+// their own stricter requireRole below. This blocks tokens with no/unknown
+// role; per-applicant ownership scoping is a separate follow-up (see report).
+const READ_ROLES = ['super_admin', 'admin', 'approver', 'verifier', 'ci_officer', 'sales_officer', 'loan_processing_officer']
+
+// List all applications
+router.get('/applications', requireRole(...READ_ROLES), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('applications')
@@ -23,7 +33,7 @@ router.get('/applications', async (req, res) => {
 })
 
 // Get signed file URLs for an application — must be before /:id to avoid route capture
-router.get('/applications/:id/files', async (req, res) => {
+router.get('/applications/:id/files', requireRole(...READ_ROLES), async (req, res) => {
   // Signed URLs expire in 1h — must not be cached by CDN / browser / edge.
   // Cache-Control covers browsers. Surrogate-Control specifically tells Fastly
   // (Railway's edge) not to cache even if Cache-Control is stripped downstream.
@@ -152,7 +162,7 @@ router.get('/applications/:id/files', async (req, res) => {
 })
 
 // Get single application by ID
-router.get('/applications/:id', async (req, res) => {
+router.get('/applications/:id', requireRole(...READ_ROLES), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('applications')
@@ -169,7 +179,7 @@ router.get('/applications/:id', async (req, res) => {
 })
 
 // Get application by phone number
-router.get('/applications/phone/:phone', async (req, res) => {
+router.get('/applications/phone/:phone', requireRole(...READ_ROLES), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('applications')

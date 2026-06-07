@@ -7,6 +7,17 @@ const { supabase } = require('../services/supabase')
 const { compressFiles } = require('../services/compress')
 const { notifySalesOfficer, notifyTeamByRole } = require('../services/email')
 
+// Block the unauthenticated /test-* helper routes in production. They invoke
+// real Loandisk/FinScore/email side effects and a destructive DB delete, so
+// they must never be reachable on the live deploy. Available only when
+// NODE_ENV !== 'production' (local/staging).
+router.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'production' && req.path.startsWith('/test')) {
+    return res.status(404).json({ status: 'error', message: 'Not found' })
+  }
+  return next()
+})
+
 // Pre-qualification check
 function preQualify(formData) {
   const reasons = []
