@@ -2,11 +2,21 @@
 
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
 const { supabase } = require('../services/supabase');
 const { verifyToken } = require('../middleware/auth');
 const { sendProblemReport } = require('../services/email');
 
 const router = express.Router();
+
+// Signed-URL lifetime for problem-report screenshots emailed to the owner (H12).
+const SCREENSHOT_URL_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+
+// Strip any path components / unsafe chars from a client-supplied filename (M3).
+function safeFilename(name) {
+  const base = path.basename(String(name || 'upload'));
+  return base.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 100) || 'upload';
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -34,10 +44,15 @@ router.post(
         });
       }
 
-      // Upload screenshot if provided
+      // Upload screenshot if provided. Screenshots routinely capture applicant
+      // PII (name/phone/score), so the bucket is PRIVATE (H12) — we store only
+      // the path and mint a time-limited signed URL for the email instead of a
+      // permanent public URL. Make the `problem-reports` bucket private in
+      // Supabase (ops) for this to fully take effect.
+      let screenshot_path = null;
       let screenshot_url = null;
       if (req.file) {
-        const filename = `${Date.now()}_${req.file.originalname}`;
+        const filename = `${Date.now()}_${safeFilename(req.file.originalname)}`;
         const storagePath = `${req.user.id}/${filename}`;
 
         const { error: uploadError } = await supabase.storage
@@ -50,10 +65,15 @@ router.post(
         if (uploadError) {
           console.error('[reports] Screenshot upload failed:', uploadError.message);
         } else {
-          const { data: urlData } = supabase.storage
+          screenshot_path = storagePath;
+          const { data: signed, error: signError } = await supabase.storage
             .from('problem-reports')
-            .getPublicUrl(storagePath);
-          screenshot_url = urlData?.publicUrl || null;
+            .createSignedUrl(storagePath, SCREENSHOT_URL_TTL_SECONDS);
+          if (signError) {
+            console.error('[reports] Screenshot signed-url failed:', signError.message);
+          } else {
+            screenshot_url = signed?.signedUrl || null;
+          }
         }
       }
 
@@ -69,7 +89,10 @@ router.post(
           reported_by_role,
           page: page || null,
           description: description.trim(),
-          screenshot_url,
+          // Persist the durable storage PATH, not the expiring signed URL, so it
+          // can be re-signed on demand later (H12). Email below uses the live
+          // signed URL.
+          screenshot_url: screenshot_path,
         })
         .select('id, timestamp')
         .single();

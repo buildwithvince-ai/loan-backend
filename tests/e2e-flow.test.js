@@ -72,6 +72,7 @@ class Query {
   update(v) { this._op = 'update'; this._payload = v; return this; }
   delete() { this._op = 'delete'; return this; }
   eq(c, v) { this._filters.push((r) => r[c] === v); return this; }
+  is(c, v) { this._filters.push((r) => (r[c] ?? null) === (v ?? null)); return this; }
   contains(c, arr) {
     this._filters.push((r) => Array.isArray(r[c]) && arr.every((a) => r[c].includes(a)));
     return this;
@@ -134,8 +135,39 @@ class Query {
 
 const tokenMap = {}; // token -> auth user id
 
+// Mirror the Postgres RPCs from migration 015 (apply_stage_transition,
+// bump_returned_count) so the real route/pipeline code can call supabase.rpc().
+// Single-threaded mock = atomicity is trivially satisfied.
+function makeRpc(fn, params) {
+  const exec = () => {
+    const row = db.applications.find((r) => r.id === params.p_id);
+    if (!row) return { data: null, error: { message: 'no rows' } };
+    if (fn === 'apply_stage_transition') {
+      row.stage = params.p_to_stage;
+      row.stage_history = [...(Array.isArray(row.stage_history) ? row.stage_history : []), params.p_entry];
+      if (params.p_so_decision != null) {
+        row.so_decision = params.p_so_decision;
+        row.so_decision_at = params.p_so_decision_at;
+      }
+      return { data: { ...row }, error: null };
+    }
+    if (fn === 'bump_returned_count') {
+      row.returned_count = (row.returned_count || 0) + 1;
+      row.last_return_reason = params.p_reason;
+      row.last_returned_at = new Date().toISOString();
+      return { data: { ...row }, error: null };
+    }
+    return { data: null, error: { message: `unknown rpc ${fn}` } };
+  };
+  return {
+    async single() { return exec(); },
+    then(resolve, reject) { try { resolve(exec()); } catch (e) { reject(e); } },
+  };
+}
+
 const supabaseMock = {
   from: (table) => new Query(table),
+  rpc: (fn, params) => makeRpc(fn, params),
   storage: { from: () => makeStorageBucket() },
   auth: {
     async getUser(token) {
@@ -227,7 +259,10 @@ function seedUsers() {
 }
 const userId = (role) => db.admin_users.find((u) => u.roles.includes(role)).id;
 const authH = (role) => ({ Authorization: `Bearer token:${role}` });
-const adminSecretH = { 'x-admin-secret': 'test-admin-secret' };
+// x-admin-secret was removed from the admin router (commit 199fdd6); the
+// dashboard now authenticates with a per-user Supabase JWT. Use an admin Bearer
+// token so these calls exercise the real RBAC path.
+const adminSecretH = { Authorization: 'Bearer token:admin' };
 
 // Repayment scheduling fields now required at the CI stage (migration 012).
 // Spread into every ci-score body so the validators pass.

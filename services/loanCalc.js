@@ -113,11 +113,24 @@ function validateLoanInputs(input) {
   const p = Number(principal);
   if (!Number.isFinite(p) || p <= 0) {
     errors.push('principal must be a positive number');
+  } else if (product && (product.min_amount != null || product.max_amount != null)) {
+    // Per-product amount band (H4) — blocks an approver adjusted_amount outside
+    // the product's allowed range (e.g. a 999,999 AKAP loan vs the 40k cap).
+    if (p < product.min_amount || p > product.max_amount) {
+      errors.push(`principal for ${normalizeLoanType(loan_type)} must be between ${product.min_amount} and ${product.max_amount}`);
+    }
   }
 
   const d = Number(duration_months);
   if (!Number.isFinite(d) || d < LOAN_DEFAULTS.min_duration_months || d > LOAN_DEFAULTS.max_duration_months) {
     errors.push(`duration must be between ${LOAN_DEFAULTS.min_duration_months} and ${LOAN_DEFAULTS.max_duration_months} months`);
+  } else if (Number(payment_scheme_id) === PAYMENT_SCHEME_IDS.weekly && d * 4 > LOAN_DEFAULTS.weekly_repayment_cap) {
+    // Weekly (AKAP) clamp mismatch (H6): calculateRepayments clamps weekly
+    // num_of_repayments at weekly_repayment_cap (24 = 6 months) while
+    // loan_duration would still send the full months, producing an inconsistent
+    // Loandisk record. Cap weekly-scheme duration at 6 months here instead.
+    const maxWeeklyMonths = Math.floor(LOAN_DEFAULTS.weekly_repayment_cap / 4);
+    errors.push(`weekly-scheme loans (e.g. AKAP) must not exceed ${maxWeeklyMonths} months`);
   }
 
   const r = Number(interest_rate);

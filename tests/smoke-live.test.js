@@ -49,7 +49,10 @@ app.use('/api/application', require('../routes/application'));
 app.use('/api/admin', require('../routes/admin'));
 
 const PHONE = '09170000777';
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
+// Admin routes are JWT-only (the x-admin-secret bypass was removed). Sign in a
+// real smoke admin account to obtain a Bearer token for the ci-score HTTP step.
+const SMOKE_EMAIL = process.env.SMOKE_ADMIN_EMAIL;
+const SMOKE_PASSWORD = process.env.SMOKE_ADMIN_PASSWORD;
 
 let pass = 0, fail = 0, server, BASE, createdId = null;
 function check(name, cond, detail) {
@@ -114,10 +117,19 @@ async function run() {
   check('verifier->ci_officer UPDATE accepted (stage_history jsonb)', advanced);
 
   // 3. CI score via real admin route (UPDATE: ci_score/ci_normalized/final_score/tier).
-  if (ADMIN_SECRET) {
+  // Sign in for a Bearer JWT — admin routes no longer accept x-admin-secret.
+  let adminToken = null;
+  if (SMOKE_EMAIL && SMOKE_PASSWORD) {
+    const { data: signIn, error: signErr } = await supabase.auth.signInWithPassword({
+      email: SMOKE_EMAIL, password: SMOKE_PASSWORD,
+    });
+    if (signErr || !signIn?.session) console.error('  smoke admin sign-in failed:', signErr?.message);
+    else adminToken = signIn.session.access_token;
+  }
+  if (adminToken) {
     const ciRes = await fetch(BASE + `/api/admin/applications/${createdId}/ci-score`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'x-admin-secret': ADMIN_SECRET },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
       // Personal loan_type → repayment fields required by validateCiRepaymentFields.
       body: JSON.stringify({
         ci_score: 40,
@@ -132,7 +144,7 @@ async function run() {
     const { data: after } = await supabase.from('applications').select('stage, status, final_score, tier').eq('id', createdId).single();
     check('ci-score auto-advanced to approver (cut point — no Loandisk)', after && after.stage === 'approver', after && after.stage);
   } else {
-    console.log('  \x1b[33m• ADMIN_SECRET not in .env — skipped ci-score HTTP step\x1b[0m');
+    console.log('  \x1b[33m• SMOKE_ADMIN_EMAIL/PASSWORD not in .env — skipped ci-score HTTP step (admin routes are JWT-only)\x1b[0m');
   }
 
   await cleanup();

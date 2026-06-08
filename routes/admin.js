@@ -28,7 +28,7 @@ router.get('/applications', requireRole(...READ_ROLES), async (req, res) => {
     return res.json(data)
   } catch (error) {
     console.error('Admin list error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -157,7 +157,7 @@ router.get('/applications/:id/files', requireRole(...READ_ROLES), async (req, re
     return res.json(signed)
   } catch (error) {
     console.error('[admin/files] unexpected error:', error.message, error.stack)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -174,7 +174,7 @@ router.get('/applications/:id', requireRole(...READ_ROLES), async (req, res) => 
     return res.json(data)
   } catch (error) {
     console.error('Admin get error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -191,7 +191,7 @@ router.get('/applications/phone/:phone', requireRole(...READ_ROLES), async (req,
     return res.json(data)
   } catch (error) {
     console.error('Admin phone lookup error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -221,8 +221,15 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
       return res.status(400).json({ error: repaymentCheck.errors.join('; ') })
     }
 
+    // Bound ci_score (M4). Unchecked, ci_score=100 normalizes to 200 → final
+    // capped at 100 → auto-approved; undefined writes NaN to the DB.
+    const ci_score_num = Number(ci_score)
+    if (!Number.isFinite(ci_score_num) || ci_score_num < 0 || ci_score_num > 50) {
+      return res.status(400).json({ error: 'ci_score must be a number between 0 and 50' })
+    }
+
     // Normalize CI from 0-50 scale to 0-100
-    const ci_normalized = Math.round((ci_score / 50) * 100)
+    const ci_normalized = Math.round((ci_score_num / 50) * 100)
     const finNorm = app.finscore_normalized || 0
     const isReapplication = ci_form_data?.is_reapplication === true || ci_form_data?.is_reapplication === 'true'
     const reapplication_bonus = isReapplication ? 10 : 0
@@ -239,7 +246,7 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
     const { data, error } = await supabase
       .from('applications')
       .update({
-        ci_score,
+        ci_score: ci_score_num,
         ci_normalized,
         final_score,
         tier,
@@ -274,7 +281,7 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
     return res.json(data)
   } catch (error) {
     console.error('CI score error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -354,7 +361,7 @@ router.patch('/applications/:id/override', requireRole('admin', 'super_admin', '
     return res.json(data)
   } catch (error) {
     console.error('Override error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -662,7 +669,7 @@ router.get('/export/consent', requireRole('admin', 'super_admin', 'approver'), a
     return res.send(csv)
   } catch (error) {
     console.error('Consent export error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 

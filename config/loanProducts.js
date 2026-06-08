@@ -14,16 +14,24 @@ const PAYMENT_SCHEME_IDS = {
 
 // Loan product key (lowercased) -> Loandisk config.
 // Keep keys aligned with frontend `loanType` values.
+// min_amount / max_amount are the per-product principal bands (H4). The
+// approver's adjusted_amount used to flow to Loandisk with only a `> 0` check,
+// so e.g. a 999,999 AKAP loan (40k cap) could be created. validateLoanInputs
+// enforces these. Group/SBL bands are per-member.
 const PRODUCT_CONFIG = {
   personal: {
     loandisk_product_id: 244322,
     allowed_payment_schemes: [3, 3413],
     default_payment_scheme: 3,
+    min_amount: 10000,
+    max_amount: 200000,
   },
   sme: {
     loandisk_product_id: 244323,
     allowed_payment_schemes: [3, 3413],
     default_payment_scheme: 3,
+    min_amount: 50000,
+    max_amount: 300000,
   },
   // Verified against live Loandisk 2026-06-03: product 244329 IS named
   // "SANGGUNIANG BARANGAY LOAN (SBL)"; 245685 is Group. The ops reference table
@@ -32,16 +40,22 @@ const PRODUCT_CONFIG = {
     loandisk_product_id: 244329,
     allowed_payment_schemes: [3, 3413],
     default_payment_scheme: 3,
+    min_amount: 5000,
+    max_amount: 100000,
   },
   group: {
     loandisk_product_id: 245685,
     allowed_payment_schemes: [3, 3413],
     default_payment_scheme: 3,
+    min_amount: 10000,
+    max_amount: 50000,
   },
   akap: {
     loandisk_product_id: 310445,
     allowed_payment_schemes: [4],
     default_payment_scheme: 4,
+    min_amount: 5000,
+    max_amount: 40000,
   },
 };
 

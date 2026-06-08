@@ -21,7 +21,7 @@ router.get('/applications', async (req, res) => {
     return res.json(data)
   } catch (error) {
     console.error('CI list error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -39,7 +39,7 @@ router.get('/applications/phone/:phone', async (req, res) => {
     return res.json(data)
   } catch (error) {
     console.error('CI phone lookup error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
@@ -69,7 +69,13 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
       return res.status(400).json({ error: repaymentCheck.errors.join('; ') })
     }
 
-    const ci_normalized = Math.round((ci_score / 50) * 100)
+    // Bound ci_score (M4) — see admin.js ci-score route.
+    const ci_score_num = Number(ci_score)
+    if (!Number.isFinite(ci_score_num) || ci_score_num < 0 || ci_score_num > 50) {
+      return res.status(400).json({ error: 'ci_score must be a number between 0 and 50' })
+    }
+
+    const ci_normalized = Math.round((ci_score_num / 50) * 100)
     const finNorm = app.finscore_normalized || 0
     const isReapplication = ci_form_data?.is_reapplication === true || ci_form_data?.is_reapplication === 'true'
     const reapplication_bonus = isReapplication ? 10 : 0
@@ -86,7 +92,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
     const { error: updateError } = await supabase
       .from('applications')
       .update({
-        ci_score,
+        ci_score: ci_score_num,
         ci_normalized,
         final_score,
         tier,
@@ -127,7 +133,7 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
     return res.json(data)
   } catch (error) {
     console.error('CI score error:', error.message)
-    return res.status(500).json({ error: error.message })
+    return res.status(500).json({ error: 'Internal server error' })
   }
 })
 

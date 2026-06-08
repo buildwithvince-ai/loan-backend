@@ -34,11 +34,30 @@ const searchLimiter = rateLimit({
 // reuse expired payloads via 304. Other routes don't rely on ETags.
 app.set('etag', false)
 
+// Explicit origin allowlist (L2). Reflecting any origin with credentials let a
+// malicious site make credentialed cross-origin calls. Allow the public form +
+// admin dashboard origins, plus localhost in non-production for dev. Override
+// via CORS_ORIGINS (comma-separated) on Railway.
+const DEFAULT_ORIGINS = [
+  'https://gr8lendingcorporation.com',
+  'https://www.gr8lendingcorporation.com'
+]
+const allowedOrigins = (process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  : DEFAULT_ORIGINS)
+if (process.env.NODE_ENV !== 'production') {
+  allowedOrigins.push('http://localhost:5173', 'http://localhost:3000')
+}
+
 app.use(cors({
-  origin: true,
+  origin: (origin, callback) => {
+    // Allow non-browser clients (curl, server-to-server) that send no Origin.
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+    return callback(new Error('Not allowed by CORS'))
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-secret', 'x-ci-secret']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-ci-secret']
 }))
 app.use(express.json())
 

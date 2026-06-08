@@ -144,8 +144,14 @@ router.get('/:token', async (req, res) => {
   const { action, application_id } = validation;
 
   try {
-    // 2. Consume the token immediately to prevent double-use
-    await consumeToken(token);
+    // 2. Atomically consume the token (H8). If another concurrent request (or a
+    // link prefetcher firing twice) already consumed it, we did NOT win — bail
+    // out as invalid so the side effects run exactly once.
+    const consumed = await consumeToken(token);
+    if (!consumed) {
+      console.log('[confirm] Token replay blocked — already consumed');
+      return res.status(410).send(invalidPage());
+    }
 
     // 3. Fetch the application
     const { data: application, error: appError } = await supabase
@@ -159,31 +165,18 @@ router.get('/:token', async (req, res) => {
       return res.status(500).send(errorPage());
     }
 
-    // 4. Update so_decision, so_decision_at, and move stage back to approver
+    // 4. Update so_decision + move stage to approver, appending history
+    // atomically server-side (M6) so concurrent writers can't clobber the array.
     const now = new Date().toISOString();
+    const historyEntry = { event: 'so_confirmation', decision: action, at: now };
 
-    const currentHistory = Array.isArray(application.stage_history)
-      ? application.stage_history
-      : [];
-
-    const updatedHistory = [
-      ...currentHistory,
-      {
-        event: 'so_confirmation',
-        decision: action,
-        at: now,
-      },
-    ];
-
-    const { error: updateError } = await supabase
-      .from('applications')
-      .update({
-        so_decision: action,
-        so_decision_at: now,
-        stage: 'approver',
-        stage_history: updatedHistory,
-      })
-      .eq('id', application_id);
+    const { error: updateError } = await supabase.rpc('apply_stage_transition', {
+      p_id: application_id,
+      p_to_stage: 'approver',
+      p_entry: historyEntry,
+      p_so_decision: action,
+      p_so_decision_at: now,
+    });
 
     if (updateError) {
       console.error('[confirm] Failed to update application:', updateError.message);

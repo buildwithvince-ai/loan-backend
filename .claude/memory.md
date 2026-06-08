@@ -59,3 +59,13 @@ Read this file at the start of every session. Append key decisions, discoveries,
 - No unit tests written (no test runner in repo). Pure helpers in `services/loanCalc.js` are testable when one is added.
 - No frontend changes — discount-reason input, scheme dropdown, fee preview, renewal picker, SA confirm/reject screens still TODO on the frontend repo.
 
+
+---
+
+## Session Log — 2026-06-08 — Security-audit remediation (docs/SECURITY-AUDIT.md)
+- **Built:** 25/26 open audit findings fixed across all 3 tiers (Tier 1 public-exposure, Tier 2 atomicity, Tier 3 hardening). New migrations `014_security_constraints.sql` (pending-phone unique index, `documents_incomplete`, `loan_push_claimed_at`) and `015_atomic_stage_history.sql` (`apply_stage_transition`, `bump_returned_count` RPCs).
+- **Decisions made:** H1 → require staff JWT on `/borrowers/search` (chosen over PII-mask). M6 lost-update fixed via Postgres `jsonb ||` RPCs called from `transitionStage` + `confirm.js` + verifier-return guard. H10 concurrent-approval fixed with a CAS claim on `loan_push_claimed_at` BEFORE Loandisk side effects, released on failure. H11 persists borrower_id/loan_id immediately after each Loandisk call for retry idempotency.
+- **Assumptions introduced:** M2 contentType derived from magic bytes via `detectMimeFromMagic` (no new dep; unknown → octet-stream). M10 presigned-URL validation enforces https always, host allowlist only if `LOANDISK_PRESIGN_HOSTS` set. CORS defaults to gr8lendingcorporation.com ± www unless `CORS_ORIGINS` set.
+- **Scope candidates deferred:** [M1] CI `form_data` minimization — needs business decision (is `ci_officer` meant to see full PII, or supply field subset). Dead `verifyAdminSecret`/`verifyAdminSecretOrToken` exports in middleware/auth.js left in place (recommend deleting later).
+- **CRITICAL deploy gate:** migrations 014 + 015 MUST be applied (Supabase SQL Editor, by hand) BEFORE pushing — code writes `documents_incomplete` and calls the two RPCs, so deploying first breaks all submits + transitions. Also make `problem-reports` bucket private (H12). e2e harness (`tests/e2e-flow.test.js`) updated: added `is()`/`rpc()` to the mock and switched admin calls from `x-admin-secret` (removed in 199fdd6) to Bearer JWT. 103/103 pass.
+- **Open items / next session:** apply migrations → push; ops: rotate ADMIN_SECRET, confirm NODE_ENV=production, set CORS_ORIGINS, make problem-reports private; resolve M1; delete dead admin-secret helpers.

@@ -62,157 +62,229 @@ async function executeLoandiskApproval(application, user, meta = {}) {
     throw new Error('loan_release_date is required to process approval.');
   }
 
-  const formData = fullApp.form_data;
-  const finScore = {
-    score: fullApp.finscore_raw,
-    riskBand: 'N/A',
-    fraudFlag: 'false'
-  };
-
-  const productCfg = getProductConfig(fullApp.loan_type);
-  if (!productCfg) {
-    throw new Error(`Unknown loan_type "${fullApp.loan_type}" — cannot map to Loandisk product`);
+  // Concurrency claim (H10): atomically grab the push for THIS call by setting
+  // loan_push_claimed_at only if it is currently null. Two concurrent approvals
+  // both pass the loandisk_loan_id idempotency check above (both see null), so
+  // without this they would both createBorrower + createLoan → duplicate loans.
+  // The loser of the CAS gets zero rows back and bails. The claim is released in
+  // the catch below if the push fails, so a later retry can re-claim.
+  const claimedAt = new Date().toISOString();
+  const { data: claimed, error: claimErr } = await supabase
+    .from('applications')
+    .update({ loan_push_claimed_at: claimedAt })
+    .eq('id', application.id)
+    .is('loan_push_claimed_at', null)
+    .select('id');
+  if (claimErr) {
+    throw new Error('Failed to claim approval push: ' + claimErr.message);
   }
-
-  // Principal/duration: prefer meta override, then SA-confirmed proposed
-  // values on the row, then the persisted loan_amount/loan_term.
-  const principal = Number(meta.principal ?? fullApp.approver_proposed_amount ?? fullApp.loan_amount);
-  const duration_months = Number(meta.duration_months ?? fullApp.approver_proposed_term ?? fullApp.loan_term);
-  // Per-loan-type default interest rate (Personal 3.5, SME 3.0, AKAP 4.0,
-  // Group/SBL 5.0). Overridable when approver passes meta.interest_rate.
-  const defaultRate = getDefaultInterestRate(fullApp.loan_type);
-  const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
-  // Payment scheme: keyed off loan_type (confirmed by ops 2026-06-03) — Personal/
-  // Group=semi-monthly(3413), SME/SBL=monthly(3), AKAP=weekly(4). An explicit
-  // meta.payment_scheme_id (approver override) still wins; otherwise fall back to
-  // the per-product config default.
-  const payment_scheme_id = meta.payment_scheme_id != null
-    ? Number(meta.payment_scheme_id)
-    : (schemeIdFromLoanType(fullApp.loan_type) ?? productCfg.default_payment_scheme);
-  const discount_reason = meta.discount_reason || null;
-
-  // First repayment date: per-product rule (AKAP=release+7, SME=release+1mo,
-  // PL/Group=release+15→salary date, SBL=release+15→honorarium date). SBL snaps
-  // to the honorarium day; PL/Group snap to salary_payout_dates. Stored back on
-  // the row and mapped to Loandisk. On failure, left unset → Loandisk default.
-  const loanTypeKey = String(fullApp.loan_type || '').trim().toLowerCase();
-  const payoutDatesForCalc = loanTypeKey === 'sbl'
-    ? (fullApp.honorarium_date != null ? [fullApp.honorarium_date] : [])
-    : fullApp.salary_payout_dates;
-  let firstRepaymentDate = null;
-  try {
-    firstRepaymentDate = calculateFirstRepaymentDate(
-      fullApp.loan_release_date,
-      fullApp.loan_type,
-      fullApp.repayment_cycle,
-      payoutDatesForCalc
-    );
-  } catch (calcErr) {
-    console.error('[pipeline:approve] first repayment date calc failed', {
-      application_id: application.id,
-      loan_type: fullApp.loan_type,
-      loan_release_date: fullApp.loan_release_date,
-      repayment_cycle: fullApp.repayment_cycle,
-      error: calcErr.message
+  if (!claimed || claimed.length === 0) {
+    console.log('[pipeline:approve] concurrent push already in progress — skipping', {
+      application_id: application.id
     });
+    return;
   }
 
-  // Discount gate: rate below the per-type default requires a documented reason.
-  if (interest_rate < defaultRate && !discount_reason) {
-    throw new Error(`discount_reason is required when interest_rate is below the ${fullApp.loan_type} default (${defaultRate}%)`);
-  }
+  // Everything below mutates Loandisk. If any step throws, release the claim so
+  // a later retry can re-run (otherwise the claim would wedge the application
+  // permanently). loandisk_borrower_id / loandisk_loan_id are persisted as soon
+  // as each side effect succeeds (H11) so a retry reuses them via the
+  // idempotency checks above instead of creating duplicates.
+  try {
+    const formData = fullApp.form_data;
+    const finScore = {
+      score: fullApp.finscore_raw,
+      riskBand: 'N/A',
+      fraudFlag: 'false'
+    };
 
-  // Renewal reuse: use linked Loandisk borrower id when present and skip
-  // the createBorrower call. Falls back to creating a new borrower for
-  // `new` applications (or renewals missing a link, though /submit blocks that).
-  let borrowerId;
-  const isRenewal = fullApp.application_category === 'renewal' && fullApp.linked_borrower_id;
-  if (isRenewal) {
-    borrowerId = fullApp.linked_borrower_id;
-    console.log('[pipeline:approve] renewal — reusing Loandisk borrower', { application_id: application.id, borrowerId });
-  } else if (fullApp.loandisk_borrower_id) {
-    // Idempotency: prior approval attempt already created the borrower.
-    borrowerId = fullApp.loandisk_borrower_id;
-    console.log('[pipeline:approve] reusing existing Loandisk borrower', { application_id: application.id, borrowerId });
-  } else {
-    borrowerId = await createBorrower(formData, finScore);
-  }
+    const productCfg = getProductConfig(fullApp.loan_type);
+    if (!productCfg) {
+      throw new Error(`Unknown loan_type "${fullApp.loan_type}" — cannot map to Loandisk product`);
+    }
 
-  // Files: only upload for fresh borrowers. Renewals already have docs in Loandisk.
-  if (!isRenewal) {
-    const fileMetadata = fullApp.file_metadata || [];
-    if (fileMetadata.length > 0) {
-      const filesToUpload = [];
-      for (const fileMeta of fileMetadata) {
-        const { data: fileData, error: downloadError } = await supabase.storage
-          .from('application-files')
-          .download(fileMeta.storage_path);
+    // Principal/duration: prefer meta override, then SA-confirmed proposed
+    // values on the row, then the persisted loan_amount/loan_term.
+    const principal = Number(meta.principal ?? fullApp.approver_proposed_amount ?? fullApp.loan_amount);
+    const duration_months = Number(meta.duration_months ?? fullApp.approver_proposed_term ?? fullApp.loan_term);
+    // Per-loan-type default interest rate (Personal 3.5, SME 3.0, AKAP 4.0,
+    // Group/SBL 5.0). Overridable when approver passes meta.interest_rate.
+    const defaultRate = getDefaultInterestRate(fullApp.loan_type);
+    const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
+    // Payment scheme: keyed off loan_type (confirmed by ops 2026-06-03) — Personal/
+    // Group=semi-monthly(3413), SME/SBL=monthly(3), AKAP=weekly(4). An explicit
+    // meta.payment_scheme_id (approver override) still wins; otherwise fall back to
+    // the per-product config default.
+    const payment_scheme_id = meta.payment_scheme_id != null
+      ? Number(meta.payment_scheme_id)
+      : (schemeIdFromLoanType(fullApp.loan_type) ?? productCfg.default_payment_scheme);
+    const discount_reason = meta.discount_reason || null;
 
-        if (downloadError) {
-          console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
-          continue;
-        }
+    // First repayment date: per-product rule (AKAP=release+7, SME=release+1mo,
+    // PL/Group=release+15→salary date, SBL=release+15→honorarium date). SBL snaps
+    // to the honorarium day; PL/Group snap to salary_payout_dates. Stored back on
+    // the row and mapped to Loandisk. On failure, left unset → Loandisk default.
+    const loanTypeKey = String(fullApp.loan_type || '').trim().toLowerCase();
+    const payoutDatesForCalc = loanTypeKey === 'sbl'
+      ? (fullApp.honorarium_date != null ? [fullApp.honorarium_date] : [])
+      : fullApp.salary_payout_dates;
+    let firstRepaymentDate = null;
+    try {
+      firstRepaymentDate = calculateFirstRepaymentDate(
+        fullApp.loan_release_date,
+        fullApp.loan_type,
+        fullApp.repayment_cycle,
+        payoutDatesForCalc
+      );
+    } catch (calcErr) {
+      console.error('[pipeline:approve] first repayment date calc failed', {
+        application_id: application.id,
+        loan_type: fullApp.loan_type,
+        loan_release_date: fullApp.loan_release_date,
+        repayment_cycle: fullApp.repayment_cycle,
+        error: calcErr.message
+      });
+    }
 
-        const buffer = Buffer.from(await fileData.arrayBuffer());
-        filesToUpload.push({
-          originalname: fileMeta.original_name,
-          buffer
+    // Discount gate: rate below the per-type default requires a documented reason.
+    if (interest_rate < defaultRate && !discount_reason) {
+      throw new Error(`discount_reason is required when interest_rate is below the ${fullApp.loan_type} default (${defaultRate}%)`);
+    }
+
+    // Renewal reuse: use linked Loandisk borrower id when present and skip
+    // the createBorrower call. Falls back to creating a new borrower for
+    // `new` applications (or renewals missing a link, though /submit blocks that).
+    let borrowerId;
+    const isRenewal = fullApp.application_category === 'renewal' && fullApp.linked_borrower_id;
+    if (isRenewal) {
+      borrowerId = fullApp.linked_borrower_id;
+      console.log('[pipeline:approve] renewal — reusing Loandisk borrower', { application_id: application.id, borrowerId });
+    } else if (fullApp.loandisk_borrower_id) {
+      // Idempotency: prior approval attempt already created the borrower.
+      borrowerId = fullApp.loandisk_borrower_id;
+      console.log('[pipeline:approve] reusing existing Loandisk borrower', { application_id: application.id, borrowerId });
+    } else {
+      borrowerId = await createBorrower(formData, finScore);
+      // H11: persist the borrower id immediately, BEFORE uploads/createLoan. If
+      // a later step throws, the reuse guard above fires on retry instead of
+      // creating a second orphaned borrower.
+      const { error: borrowerPersistErr } = await supabase
+        .from('applications')
+        .update({ loandisk_borrower_id: borrowerId })
+        .eq('id', application.id);
+      if (borrowerPersistErr) {
+        console.error('[pipeline:approve] failed to persist borrower id early', {
+          application_id: application.id, borrowerId, error: borrowerPersistErr.message
         });
       }
+    }
 
-      if (filesToUpload.length > 0) {
-        await uploadAllFiles(borrowerId, filesToUpload);
-        console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`);
+    // Files: only upload for fresh borrowers. Renewals already have docs in Loandisk.
+    if (!isRenewal) {
+      const fileMetadata = fullApp.file_metadata || [];
+      if (fileMetadata.length > 0) {
+        const filesToUpload = [];
+        for (const fileMeta of fileMetadata) {
+          const { data: fileData, error: downloadError } = await supabase.storage
+            .from('application-files')
+            .download(fileMeta.storage_path);
+
+          if (downloadError) {
+            console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
+            continue;
+          }
+
+          const buffer = Buffer.from(await fileData.arrayBuffer());
+          filesToUpload.push({
+            originalname: fileMeta.original_name,
+            buffer
+          });
+        }
+
+        if (filesToUpload.length > 0) {
+          await uploadAllFiles(borrowerId, filesToUpload);
+          console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`);
+        }
       }
     }
-  }
 
-  let loanResult;
-  try {
-    loanResult = await createLoan({
-      borrower_id: borrowerId,
-      loan_type: fullApp.loan_type,
-      principal,
-      duration_months,
-      interest_rate,
-      payment_scheme_id,
-      discount_reason,
-      loan_application_id: fullApp.reference_id,
-      approver_id: user.id,
-      released_date: isoToMMDDYYYY(fullApp.loan_release_date),
-      first_repayment_date: firstRepaymentDate
-    });
-  } catch (loanErr) {
-    console.error('[pipeline:approve] createLoan failed after borrower resolved', {
-      borrower_id: borrowerId,
-      application_id: application.id,
-      error: loanErr.message
-    });
-    throw new Error('Borrower resolved but loan creation failed: ' + loanErr.message);
-  }
+    let loanResult;
+    try {
+      loanResult = await createLoan({
+        borrower_id: borrowerId,
+        loan_type: fullApp.loan_type,
+        principal,
+        duration_months,
+        interest_rate,
+        payment_scheme_id,
+        discount_reason,
+        loan_application_id: fullApp.reference_id,
+        approver_id: user.id,
+        released_date: isoToMMDDYYYY(fullApp.loan_release_date),
+        first_repayment_date: firstRepaymentDate
+      });
+    } catch (loanErr) {
+      console.error('[pipeline:approve] createLoan failed after borrower resolved', {
+        borrower_id: borrowerId,
+        application_id: application.id,
+        error: loanErr.message
+      });
+      throw new Error('Borrower resolved but loan creation failed: ' + loanErr.message);
+    }
 
-  const { error: updateError } = await supabase
-    .from('applications')
-    .update({
-      loandisk_borrower_id: borrowerId,
-      loandisk_loan_id: loanResult.loan_id,
-      approved_interest_rate: interest_rate,
-      discount_reason,
-      payment_scheme_id,
-      num_of_repayments: loanResult.num_of_repayments,
-      service_fee_amount: loanResult.fees.service_fee,
-      insurance_fee_amount: loanResult.fees.insurance_fee,
-      total_fees_amount: loanResult.fees.total_fees,
-      net_disbursement_amount: loanResult.fees.net_disbursement,
-      total_interest_amount: loanResult.total_interest,
-      first_repayment_date: firstRepaymentDate,
-      loan_released_at: new Date().toISOString(),
-      status: 'approved'
-    })
-    .eq('id', application.id);
+    // Persist loandisk_loan_id immediately (H11). If the full update below fails,
+    // the loandisk_loan_id idempotency check at the top still short-circuits a
+    // retry — preventing a duplicate Loandisk loan.
+    if (loanResult.loan_id) {
+      const { error: loanIdPersistErr } = await supabase
+        .from('applications')
+        .update({ loandisk_loan_id: loanResult.loan_id })
+        .eq('id', application.id);
+      if (loanIdPersistErr) {
+        console.error('[pipeline:approve] failed to persist loan id early', {
+          application_id: application.id, loan_id: loanResult.loan_id, error: loanIdPersistErr.message
+        });
+      }
+    }
 
-  if (updateError) {
-    throw new Error('Failed to update application after Loandisk push: ' + updateError.message);
+    const { error: updateError } = await supabase
+      .from('applications')
+      .update({
+        loandisk_borrower_id: borrowerId,
+        loandisk_loan_id: loanResult.loan_id,
+        approved_interest_rate: interest_rate,
+        discount_reason,
+        payment_scheme_id,
+        num_of_repayments: loanResult.num_of_repayments,
+        service_fee_amount: loanResult.fees.service_fee,
+        insurance_fee_amount: loanResult.fees.insurance_fee,
+        total_fees_amount: loanResult.fees.total_fees,
+        net_disbursement_amount: loanResult.fees.net_disbursement,
+        total_interest_amount: loanResult.total_interest,
+        first_repayment_date: firstRepaymentDate,
+        loan_released_at: new Date().toISOString(),
+        status: 'approved'
+      })
+      .eq('id', application.id);
+
+    if (updateError) {
+      throw new Error('Failed to update application after Loandisk push: ' + updateError.message);
+    }
+  } catch (pushErr) {
+    // Release the claim so a retry can re-run. We only reach here if the loan
+    // was NOT fully recorded; if loandisk_loan_id was persisted above, the
+    // top-of-function idempotency check will skip the side effects on retry.
+    const { error: releaseErr } = await supabase
+      .from('applications')
+      .update({ loan_push_claimed_at: null })
+      .eq('id', application.id)
+      .is('loandisk_loan_id', null);
+    if (releaseErr) {
+      console.error('[pipeline:approve] failed to release push claim after error', {
+        application_id: application.id, error: releaseErr.message
+      });
+    }
+    throw pushErr;
   }
 }
 
@@ -243,6 +315,12 @@ const TRANSITION_GUARDS = {
     const userRoles = user.roles || [];
     if (!permitted.some((r) => userRoles.includes(r))) {
       return { allowed: false, reason: 'Only verifiers or admins can advance to CI stage' };
+    }
+    // H3: a submission whose KYC uploads partially failed is flagged
+    // documents_incomplete. Block it from advancing past verification so an
+    // app missing ID/income docs can't proceed toward Loandisk approval.
+    if (application.documents_incomplete) {
+      return { allowed: false, reason: 'Application has missing/failed document uploads — re-collect documents before advancing' };
     }
     return { allowed: true, reason: 'Advancing to CI officer' };
   },
@@ -312,15 +390,12 @@ const TRANSITION_GUARDS = {
     // Client-confirmation (the client's go-ahead before final approval) is an
     // APPROVER-only action via POST /pipeline/:id/so-confirmation — it sets
     // so_confirmation_sent_at directly and never routes through this transition.
-    const currentCount = application.returned_count || 0;
-    const { error: trackError } = await supabase
-      .from('applications')
-      .update({
-        returned_count: currentCount + 1,
-        last_return_reason: meta.return_reason,
-        last_returned_at: new Date().toISOString()
-      })
-      .eq('id', application.id);
+    // Atomic increment (M6) — read-modify-write on returned_count loses updates
+    // under concurrent returns. bump_returned_count does it in one SQL statement.
+    const { error: trackError } = await supabase.rpc('bump_returned_count', {
+      p_id: application.id,
+      p_reason: meta.return_reason
+    });
     if (trackError) {
       throw new Error('Failed to record rework return: ' + trackError.message);
     }
@@ -420,11 +495,9 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
     throw new Error(result.reason);
   }
 
-  // Build the new stage_history entry
-  const existingHistory = Array.isArray(application.stage_history)
-    ? application.stage_history
-    : [];
-
+  // Build the single new stage_history entry. The RPC appends it server-side
+  // (M6) with `stage_history || entry`, so concurrent transitions can't clobber
+  // each other's audit entries via a read-modify-write race.
   const historyEntry = {
     from: currentStage,
     to: toStage,
@@ -434,29 +507,21 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
     meta: meta || {}
   };
 
-  const updatedHistory = [...existingHistory, historyEntry];
-
-  // Build the update payload — conditionally include SO-related timestamps
-  const updatePayload = {
-    stage: toStage,
-    stage_history: updatedHistory
-  };
-
   // Note: client-confirmation (so_confirmation_sent_at) is set only by the
   // approver-only route POST /pipeline/:id/so-confirmation — never here.
   // verifier->sales_officer is always a rework return (see the guard above).
+  const soDecision = (toStage === 'approver' && meta.so_decision) ? meta.so_decision : null;
+  const soDecisionAt = soDecision ? new Date().toISOString() : null;
 
-  if (toStage === 'approver' && meta.so_decision) {
-    updatePayload.so_decision = meta.so_decision;
-    updatePayload.so_decision_at = new Date().toISOString();
-  }
-
-  // Write the new stage and history to the DB
+  // Atomic write: set stage, append history, optionally stamp SO decision.
   const { data: updated, error: updateError } = await supabase
-    .from('applications')
-    .update(updatePayload)
-    .eq('id', appId)
-    .select()
+    .rpc('apply_stage_transition', {
+      p_id: appId,
+      p_to_stage: toStage,
+      p_entry: historyEntry,
+      p_so_decision: soDecision,
+      p_so_decision_at: soDecisionAt
+    })
     .single();
 
   if (updateError) {

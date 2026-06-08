@@ -120,7 +120,7 @@ async function sendEmail({ to, subject, htmlBody }) {
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      await axios.post(RESEND_API, payload, { headers });
+      await axios.post(RESEND_API, payload, { headers, timeout: 10000 });
       console.log(`[email] Sent "${subject}" → ${to}`);
       return;
     } catch (err) {

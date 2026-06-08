@@ -1,19 +1,27 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// Public borrower search — used by renewal flow on the loan form.
+// Borrower search — backs the internal renewal flow.
 // Source: applications table, scoped to rows that already have a Loandisk
 // borrower id (i.e. previously approved). Search is OR-matched on full_name
 // (case-insensitive prefix/contains) and phone (prefix). Returns max 10 rows.
-// Public route, rate-limited by the parent mount in index.js.
+//
+// AUTH (H1, 2026-06-08): this returns customer PII (name + phone) and used to
+// be public — anyone on the internet could enumerate borrowers on a 2-char
+// query. Now requires a valid staff JWT. Rate-limited by the parent mount.
 // ---------------------------------------------------------------------------
 
 const express = require('express');
 const router = express.Router();
 const { supabase } = require('../services/supabase');
+const { verifyToken, requireRole } = require('../middleware/auth');
 
 const MIN_QUERY_LENGTH = 2;
 const MAX_RESULTS = 10;
+
+const STAFF_ROLES = ['super_admin', 'admin', 'approver', 'verifier', 'ci_officer', 'sales_officer', 'loan_processing_officer'];
+
+router.use(verifyToken, requireRole(...STAFF_ROLES));
 
 router.get('/search', async (req, res) => {
   try {

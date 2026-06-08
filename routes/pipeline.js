@@ -53,7 +53,7 @@ router.get('/:id/history', requireRole(...READ_ROLES), async (req, res) => {
     return res.json(data.stage_history || []);
   } catch (error) {
     console.error('[pipeline] history error:', error.message);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -87,7 +87,7 @@ router.patch(
       return res.json(data);
     } catch (error) {
       console.error('[pipeline] assign-sales-officer error:', error.message);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   }
 );
@@ -146,7 +146,7 @@ router.post(
       return res.json({ message: 'SO confirmation email sent', sent_to: soUser.email });
     } catch (error) {
       console.error('[pipeline] so-confirmation error:', error.message);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   }
 );
@@ -194,7 +194,7 @@ router.get('/:id/files', requireRole(...READ_ROLES), async (req, res) => {
     return res.json(signed);
   } catch (error) {
     console.error('[pipeline] files error:', error.message);
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 

@@ -89,22 +89,36 @@ async function validateToken(token) {
 /**
  * consumeToken
  *
- * Marks a token as used so it cannot be reused.
+ * Atomically marks a token used, but ONLY if it is currently unused (H8).
+ * The `used=false` precondition + returning rows makes this a compare-and-swap:
+ * exactly one of N concurrent requests gets a row back; the rest get none and
+ * must not proceed. Prevents token replay (e.g. a link prefetcher firing the
+ * URL twice → duplicate so_decision writes + duplicate approver emails).
  *
  * @param {string} token - The raw hex token string
+ * @returns {Promise<boolean>} true if THIS call consumed the token, false if it
+ *   was already used / not found (caller must treat false as invalid).
  */
 async function consumeToken(token) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('confirmation_tokens')
     .update({ used: true })
-    .eq('token', token);
+    .eq('token', token)
+    .eq('used', false)
+    .select('id');
 
   if (error) {
     console.error('[tokens] consumeToken error:', error.message);
     throw new Error(`[tokens] Failed to consume token: ${error.message}`);
   }
 
-  console.log(`[tokens] Consumed token: ${token.substring(0, 8)}...`);
+  const won = Array.isArray(data) && data.length > 0;
+  if (won) {
+    console.log(`[tokens] Consumed token: ${token.substring(0, 8)}...`);
+  } else {
+    console.log(`[tokens] Token already consumed (replay blocked): ${token.substring(0, 8)}...`);
+  }
+  return won;
 }
 
 module.exports = { generateConfirmationTokens, validateToken, consumeToken };

@@ -1,11 +1,40 @@
 const express = require('express')
 const multer = require('multer')
 const router = express.Router()
-const upload = multer({ storage: multer.memoryStorage() })
+// Bound the public upload path (H9): unbounded memoryStorage + upload.any()
+// let a caller buffer arbitrary files in RAM. Cap each file at 5MB and the
+// count at 12 (a full KYC set is well under that). Files cap also bounds the
+// concurrent sharp decode in compressFiles.
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+const MAX_UPLOAD_FILES = 12
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_UPLOAD_FILES }
+})
+
+// Run upload.any() but translate multer's limit errors into clean 400s instead
+// of letting them fall through to a default 500 HTML page.
+const uploadAny = upload.any()
+function handleUpload(req, res, next) {
+  uploadAny(req, res, (err) => {
+    if (!err) return next()
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'A file exceeds the 5MB size limit.'
+      : err.code === 'LIMIT_FILE_COUNT'
+        ? `Too many files (max ${MAX_UPLOAD_FILES}).`
+        : 'File upload failed. Please try again.'
+    return res.status(400).json({ status: 'error', message })
+  })
+}
 const { createBorrower, uploadAllFiles } = require('../services/loandisk')
 const { supabase } = require('../services/supabase')
-const { compressFiles } = require('../services/compress')
+const { compressFiles, detectMimeFromMagic } = require('../services/compress')
 const { notifySalesOfficer, notifyTeamByRole } = require('../services/email')
+
+// Single-member loan types accepted by /submit (L1). Group/SBL go via
+// /submit-group. An unmapped type otherwise skips income/amount limits.
+const SINGLE_MEMBER_LOAN_TYPES = ['personal', 'sme', 'akap']
+const MAX_GROUP_MEMBERS = 30
 
 // Block the unauthenticated /test-* helper routes in production. They invoke
 // real Loandisk/FinScore/email side effects and a destructive DB delete, so
@@ -22,16 +51,31 @@ router.use((req, res, next) => {
 function preQualify(formData) {
   const reasons = []
 
-  // Age check (21-65) — frontend may send dateOfBirth or legacy dob
+  // Loan type allowlist (L1) — an unmapped/missing type would otherwise skip
+  // every income/amount limit below and still get accepted + scored.
+  const loanType = String(formData.loanType || '').trim().toLowerCase()
+  if (!SINGLE_MEMBER_LOAN_TYPES.includes(loanType)) {
+    reasons.push('Invalid loan type')
+  }
+
+  // Age check (21-65) — frontend may send dateOfBirth or legacy dob.
+  // DOB is REQUIRED (H5): when absent the age gate used to be skipped entirely,
+  // letting an applicant bypass it by simply omitting the field.
   const dobValue = formData.dateOfBirth || formData.dob
-  if (dobValue) {
+  if (!dobValue) {
+    reasons.push('Date of birth is required')
+  } else {
     const dob = new Date(dobValue)
-    const today = new Date()
-    let age = today.getFullYear() - dob.getFullYear()
-    const m = today.getMonth() - dob.getMonth()
-    if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--
-    if (age < 21 || age > 65) {
-      reasons.push('Applicant must be between 21 and 65 years old')
+    if (Number.isNaN(dob.getTime())) {
+      reasons.push('Invalid date of birth')
+    } else {
+      const today = new Date()
+      let age = today.getFullYear() - dob.getFullYear()
+      const m = today.getMonth() - dob.getMonth()
+      if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--
+      if (age < 21 || age > 65) {
+        reasons.push('Applicant must be between 21 and 65 years old')
+      }
     }
   }
 
@@ -107,7 +151,7 @@ router.post('/test-upload', upload.single('file'), async (req, res) => {
 })
 
 // Main submit route — saves to Supabase, no Loandisk until admin approval
-router.post('/submit', upload.any(), async (req, res) => {
+router.post('/submit', handleUpload, async (req, res) => {
   try {
     const formData = req.body
     const files = req.files || []
@@ -215,19 +259,29 @@ router.post('/submit', upload.any(), async (req, res) => {
     const reference_id = 'GR8-' + Date.now()
     const folderName = `${reference_id}_${formData.firstName}-${formData.lastName}`
     const file_metadata = []
+    let upload_failures = 0
     const compressedFiles = await compressFiles(files)
 
     for (const file of compressedFiles) {
       const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
+      // Derive contentType from the file's magic bytes, not the client-declared
+      // mimetype (M2). A client could otherwise label an SVG/HTML as image/jpeg
+      // and get stored XSS when the file is later served. Unknown types fall back
+      // to octet-stream so they download instead of rendering inline.
+      const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
       const { error: uploadError } = await supabase.storage
         .from('application-files')
         .upload(storagePath, file.buffer, {
-          contentType: file.mimetype,
+          contentType,
           upsert: false
         })
 
       if (uploadError) {
+        // H3: a dropped upload used to vanish silently, leaving the app
+        // persisted with missing KYC docs. Track it and flag the row so the
+        // pipeline blocks advance instead of pushing an incomplete record.
         console.error('File upload error:', uploadError.message)
+        upload_failures++
         continue
       }
 
@@ -268,10 +322,22 @@ router.post('/submit', upload.any(), async (req, res) => {
         prior_decline_flag,
         prior_decline_reference,
         application_category,
-        linked_borrower_id
+        linked_borrower_id,
+        documents_incomplete: upload_failures > 0
       })
 
-    if (error) throw error
+    if (error) {
+      // H7: the pending-phone SELECT above is non-atomic; a concurrent submit
+      // can slip past it. The partial unique index (migration 014) makes the
+      // second insert fail with 23505 — treat that as the duplicate case.
+      if (error.code === '23505') {
+        return res.status(200).json({
+          status: 'error',
+          message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
+        })
+      }
+      throw error
+    }
 
     // Email notification — errors won't fail the response
     try {
@@ -296,7 +362,7 @@ router.post('/submit', upload.any(), async (req, res) => {
 })
 
 // Group / SBL multi-member submit route
-router.post('/submit-group', upload.any(), async (req, res) => {
+router.post('/submit-group', handleUpload, async (req, res) => {
   try {
     const { loanType, totalLoanAmount, groupName } = req.body
     const loanTerm = req.body.paymentTerm || req.body.loanTerm
@@ -318,9 +384,20 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     if (loanType === 'sbl' && members.length < 1) {
       return res.status(200).json({ status: 'declined', reasons: ['SBL requires at least 1 member'] })
     }
+    // Upper bound (L3/H9): each member triggers a billed FinScore call fanned
+    // out via Promise.all — cap the count so one request can't fan out unbounded.
+    if (members.length > MAX_GROUP_MEMBERS) {
+      return res.status(200).json({ status: 'declined', reasons: [`This loan supports at most ${MAX_GROUP_MEMBERS} members`] })
+    }
 
     // Check for existing pending application with leader's phone
     const leader = members[0]
+    // M5: leader.mobile drives the dedupe/prior-decline lookups below. When
+    // absent, .eq('phone', undefined) matches nothing and the dedupe is
+    // silently bypassed, persisting a row with a null phone. Require it.
+    if (!leader || !leader.mobile || !/^09\d{9}$/.test(leader.mobile)) {
+      return res.status(200).json({ status: 'declined', reasons: ['Group leader must have a valid mobile number (09XXXXXXXXX)'] })
+    }
 
     // Validate sales_officer_id if provided
     let assigned_sales_officer = null;
@@ -385,21 +462,28 @@ router.post('/submit-group', upload.any(), async (req, res) => {
           memberErrors.push(`Member ${i + 1}: Loan amount must be between ₱${memberLimit.min.toLocaleString()} and ₱${memberLimit.max.toLocaleString()}`)
         }
       }
-      // Age check — frontend may send dateOfBirth or legacy dob
+      // Age check — DOB required (H5): without it the age gate is skipped and
+      // a member can bypass 21-65 by omitting the field.
       const memberDob = member.dateOfBirth || member.dob
-      if (memberDob) {
+      if (!memberDob) {
+        memberErrors.push(`Member ${i + 1}: Date of birth is required`)
+      } else {
         const dob = new Date(memberDob)
-        const today = new Date()
-        let age = today.getFullYear() - dob.getFullYear()
-        const m = today.getMonth() - dob.getMonth()
-        if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--
-        if (age < 21 || age > 65) {
-          memberErrors.push(`Member ${i + 1}: Must be between 21 and 65 years old`)
+        if (Number.isNaN(dob.getTime())) {
+          memberErrors.push(`Member ${i + 1}: Invalid date of birth`)
+        } else {
+          const today = new Date()
+          let age = today.getFullYear() - dob.getFullYear()
+          const m = today.getMonth() - dob.getMonth()
+          if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--
+          if (age < 21 || age > 65) {
+            memberErrors.push(`Member ${i + 1}: Must be between 21 and 65 years old`)
+          }
         }
       }
-      // Mobile check
-      if (member.mobile && !/^09\d{9}$/.test(member.mobile)) {
-        memberErrors.push(`Member ${i + 1}: Invalid mobile number format`)
+      // Mobile required + format (M5) — a missing mobile persists a null-phone row.
+      if (!member.mobile || !/^09\d{9}$/.test(member.mobile)) {
+        memberErrors.push(`Member ${i + 1}: A valid mobile number (09XXXXXXXXX) is required`)
       }
     })
     if (memberErrors.length > 0) {
@@ -412,7 +496,7 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       members.map(async (member, i) => {
         try {
           const result = await getScore(member.mobile)
-          console.log(`[Group] FinScore member ${i} (${member.mobile}):`, JSON.stringify(result))
+          console.log(`[Group] FinScore member ${i}:`, JSON.stringify(result))
           if (result.phoneNotFound || result.noScore) {
             return { finscore_raw: 0, finscore_normalized: 0 }
           }
@@ -430,19 +514,23 @@ router.post('/submit-group', upload.any(), async (req, res) => {
     const folderName = `${reference_id}_${leader.firstName}-${leader.lastName}`
 
     const file_metadata = []
+    let upload_failures = 0
     const compressedFiles = await compressFiles(files)
 
     for (const file of compressedFiles) {
       const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
+      // contentType from magic bytes, not client-declared mimetype (M2).
+      const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
       const { error: uploadError } = await supabase.storage
         .from('application-files')
         .upload(storagePath, file.buffer, {
-          contentType: file.mimetype,
+          contentType,
           upsert: false
         })
 
       if (uploadError) {
         console.error('File upload error:', uploadError.message)
+        upload_failures++
         continue
       }
 
@@ -485,7 +573,8 @@ router.post('/submit-group', upload.any(), async (req, res) => {
         consent_agreed,
         consent_agreed_at,
         prior_decline_flag: isLeader ? prior_decline_flag : false,
-        prior_decline_reference: isLeader ? prior_decline_reference : null
+        prior_decline_reference: isLeader ? prior_decline_reference : null,
+        documents_incomplete: upload_failures > 0
       }
     })
 
@@ -493,7 +582,17 @@ router.post('/submit-group', upload.any(), async (req, res) => {
       .from('applications')
       .insert(rows)
 
-    if (error) throw error
+    if (error) {
+      // H7: concurrent submit slipped past the pending-phone check — the partial
+      // unique index rejects the duplicate leader phone with 23505.
+      if (error.code === '23505') {
+        return res.status(200).json({
+          status: 'error',
+          message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
+        })
+      }
+      throw error
+    }
 
     // Email notification — errors won't fail the response
     try {

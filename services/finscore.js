@@ -3,6 +3,17 @@ const axios = require('axios')
 let cachedToken = null
 let tokenExpiry = null
 
+// Mask a mobile to its last 4 digits for logs (M7) — full numbers used to be
+// logged unconditionally, a standing PII sink in Railway logs.
+function maskMobile(mobile) {
+  const s = String(mobile || '')
+  return s.length <= 4 ? '****' : `${'*'.repeat(s.length - 4)}${s.slice(-4)}`
+}
+
+// Verbose FinScore response logging (full credit payload) is off unless
+// FINSCORE_DEBUG=1 — see M7.
+const FINSCORE_DEBUG = process.env.FINSCORE_DEBUG === '1'
+
 async function getAccessToken() {
   if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
     return cachedToken
@@ -19,7 +30,10 @@ async function getAccessToken() {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Authorization': `Basic ${credentials}`
-      }
+      },
+      // Token POST had no timeout (M9): a hung auth endpoint hangs the public
+      // /submit request — the 25s score-call timeout doesn't cover this call.
+      timeout: 10000
     }
   )
 
@@ -104,7 +118,7 @@ async function getScore(mobileNumber) {
     const productId = detectProductId(mobileNumber)
     const requestId = Date.now().toString()
 
-    console.log(`FinScore request — mobile: ${converted}, product: ${productId}`)
+    console.log(`FinScore request — mobile: ${maskMobile(converted)}, product: ${productId}`)
 
     const response = await axios.post(
       process.env.FINSCORE_SCORE_URL,
@@ -122,7 +136,9 @@ async function getScore(mobileNumber) {
       }
     )
 
-    console.log('FinScore full response:', JSON.stringify(response.data, null, 2))
+    if (FINSCORE_DEBUG) {
+      console.log('FinScore full response:', JSON.stringify(response.data, null, 2))
+    }
 
     const data = response.data
 

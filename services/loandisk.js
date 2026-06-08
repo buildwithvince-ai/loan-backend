@@ -129,6 +129,36 @@ function authHeaders() {
   }
 }
 
+// Per-call timeout (M10). Without it a stalled Loandisk/S3 endpoint hangs the
+// approval indefinitely, and the serial upload loop multiplies the stall.
+const LOANDISK_TIMEOUT_MS = Number(process.env.LOANDISK_TIMEOUT_MS) || 30000
+
+// Validate an upstream-supplied presigned URL before we PUT a file to it (M10).
+// The URL comes from Loandisk's response and is used verbatim — enforce https
+// (no downgrade / SSRF to internal http) and, when LOANDISK_PRESIGN_HOSTS is
+// set (comma-separated host suffixes), restrict the host to that allowlist.
+function assertSafePresignedUrl(rawUrl) {
+  let parsed
+  try {
+    parsed = new URL(rawUrl)
+  } catch (_e) {
+    throw new Error('Loandisk presigned URL is not a valid URL')
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Loandisk presigned URL must be https (got ${parsed.protocol})`)
+  }
+  const allow = (process.env.LOANDISK_PRESIGN_HOSTS || '')
+    .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
+  if (allow.length > 0) {
+    const host = parsed.hostname.toLowerCase()
+    const ok = allow.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
+    if (!ok) {
+      throw new Error(`Loandisk presigned URL host not allowed: ${parsed.hostname}`)
+    }
+  }
+  return parsed
+}
+
 function formatDOB(dob) {
   if (!dob) return ''
   const s = String(dob).trim()
@@ -331,7 +361,7 @@ async function createBorrower(formData, finScore) {
   console.log('[loandisk:createBorrower] payload=', truncate(JSON.stringify(payload)))
 
   try {
-    const response = await axios.post(url, payload, { headers })
+    const response = await axios.post(url, payload, { headers, timeout: LOANDISK_TIMEOUT_MS })
     logCall({ op: 'createBorrower', method: 'POST', url, response: response.data, elapsedMs: Date.now() - start })
     const borrowerId = response.data?.response?.borrower_id
     if (!borrowerId) throw new Error('Loandisk createBorrower returned no borrower_id')
@@ -346,7 +376,7 @@ async function createBorrower(formData, finScore) {
       const retryStart = Date.now()
       const retryPayload = { ...payload, borrower_unique_number: '' }
       try {
-        const retry = await axios.post(url, retryPayload, { headers })
+        const retry = await axios.post(url, retryPayload, { headers, timeout: LOANDISK_TIMEOUT_MS })
         logCall({ op: 'createBorrower:retry', method: 'POST', url, response: retry.data, elapsedMs: Date.now() - retryStart })
         const borrowerId = retry.data?.response?.borrower_id
         if (!borrowerId) throw new Error('Loandisk createBorrower retry returned no borrower_id')
@@ -392,7 +422,7 @@ async function updateBorrower(borrowerId, formData, finScore, opts = {}) {
   const start = Date.now()
 
   try {
-    const response = await axios.put(url, merged, { headers })
+    const response = await axios.put(url, merged, { headers, timeout: LOANDISK_TIMEOUT_MS })
     logCall({ op: 'updateBorrower', method: 'PUT', url, response: response.data, elapsedMs: Date.now() - start })
     return response.data
   } catch (err) {
@@ -407,7 +437,7 @@ async function getBorrower(borrowerId) {
   const headers = authHeaders()
   const start = Date.now()
   try {
-    const response = await axios.get(url, { headers })
+    const response = await axios.get(url, { headers, timeout: LOANDISK_TIMEOUT_MS })
     logCall({ op: 'getBorrower', method: 'GET', url, elapsedMs: Date.now() - start })
     return response.data?.response || null
   } catch (err) {
@@ -422,7 +452,7 @@ async function uploadFile(borrowerId, fileName, fileBuffer) {
   const presignStart = Date.now()
 
   try {
-    const presignedResponse = await axios.get(presignUrl, { headers })
+    const presignedResponse = await axios.get(presignUrl, { headers, timeout: LOANDISK_TIMEOUT_MS })
     logCall({ op: 'uploadFile:presign', method: 'GET', url: presignUrl, elapsedMs: Date.now() - presignStart })
 
     const presigned_url = presignedResponse.data?.response?.Results?.[0]?.presigned_url
@@ -431,9 +461,13 @@ async function uploadFile(borrowerId, fileName, fileBuffer) {
       throw new Error('Loandisk presign returned no url/file_id')
     }
 
+    // Validate the upstream-supplied URL before PUTting to it (M10).
+    assertSafePresignedUrl(presigned_url)
+
     const putStart = Date.now()
     await axios.put(presigned_url, fileBuffer, {
-      headers: { 'Content-Type': 'application/octet-stream' }
+      headers: { 'Content-Type': 'application/octet-stream' },
+      timeout: LOANDISK_TIMEOUT_MS
     })
     console.log(`[loandisk:uploadFile] OK ${fileName} -> file_id=${file_id} elapsed=${Date.now() - putStart}ms`)
     return file_id
@@ -608,7 +642,7 @@ async function createLoan(input) {
   console.log('[loandisk:createLoan] payload=', truncate(JSON.stringify(payload)))
 
   try {
-    const response = await axios.post(url, payload, { headers })
+    const response = await axios.post(url, payload, { headers, timeout: LOANDISK_TIMEOUT_MS })
     logCall({ op: 'createLoan', method: 'POST', url, response: response.data, elapsedMs: Date.now() - start })
     const loanId = response.data?.response?.loan_id || response.data?.response?.Results?.[0]?.loan_id
     if (!loanId) {
