@@ -63,9 +63,9 @@ const PRODUCT_CONFIG = {
 // the approval flow when an approver does not override the rate. All values
 // stay within LOAN_DEFAULTS.min_interest_rate..max_interest_rate.
 const DEFAULT_INTEREST_RATES = {
-  personal: 3.5,
-  sme: 3.0,
-  akap: 4.0,
+  personal: 5.0,
+  sme: 5.0,
+  akap: 5.0,
   group: 5.0,
   sbl: 5.0,
 };
@@ -79,7 +79,10 @@ const LOAN_DEFAULTS = {
   interest_period: 'Month',
   decimal_places: 'round_off_to_two_decimal',
   duration_period: 'Months',
-  min_interest_rate: 3,
+  // Hard-locked at 5% for all products (2026-06-09). min == max collapses the
+  // band so an approver cannot discount below 5; the discount_reason path in
+  // validateLoanInputs is now effectively unreachable.
+  min_interest_rate: 5,
   max_interest_rate: 5,
   min_duration_months: 3,
   max_duration_months: 24,

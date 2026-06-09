@@ -693,7 +693,7 @@ async function run() {
     const loanInput = loandiskCalls.createLoan[loandiskCalls.createLoan.length - 1];
     check('createLoan payload: principal 25000', Number(loanInput.principal) === 25000, JSON.stringify(loanInput.principal));
     check('createLoan payload: duration 12', Number(loanInput.duration_months) === 12, JSON.stringify(loanInput.duration_months));
-    check('createLoan payload: personal default rate 3.5', Number(loanInput.interest_rate) === 3.5, JSON.stringify(loanInput.interest_rate));
+    check('createLoan payload: personal default rate 5.0', Number(loanInput.interest_rate) === 5.0, JSON.stringify(loanInput.interest_rate));
     // repayment_cycle '15-30' (2-payout) overrides the product default -> semi-monthly 3413.
     check('createLoan payload: cycle-derived scheme 3413 (semi-monthly)', Number(loanInput.payment_scheme_id) === 3413, JSON.stringify(loanInput.payment_scheme_id));
     check('createLoan payload: released_date mm/dd/yyyy', loanInput.released_date === '06/10/2026', String(loanInput.released_date));
