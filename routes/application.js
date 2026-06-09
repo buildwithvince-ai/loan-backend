@@ -111,6 +111,60 @@ function preQualify(formData) {
   return reasons
 }
 
+// Background file processor for /submit (C). Runs AFTER the response is sent:
+// compresses + uploads KYC files, patches file_metadata onto the row, then
+// notifies the verifier team. Fire-and-forget — it must never throw, since the
+// HTTP response is already committed by the time it runs.
+//
+// TRADEOFF (durability): the multer buffers live in memory and this is not a
+// durable job. A process restart mid-upload leaves the row with
+// documents_incomplete=true and no files — recoverable by re-upload but not
+// automatic. A real job queue (pg-boss / Redis) is the correct fix if submit
+// volume grows. [ASSUMPTION] acceptable at current low volume.
+async function processSubmitFiles({ applicationId, reference_id, folderName, files, formData }) {
+  try {
+    const compressedFiles = await compressFiles(files)
+    const uploadResults = await Promise.all(compressedFiles.map(async (file) => {
+      const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
+      const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
+      const { error: uploadError } = await supabase.storage
+        .from('application-files')
+        .upload(storagePath, file.buffer, { contentType, upsert: false })
+      if (uploadError) {
+        console.error('File upload error:', uploadError.message)
+        return null
+      }
+      return {
+        field_name: file.fieldname,
+        original_name: file.originalname,
+        original_size: file.originalSize || file.size,
+        size: file.size,
+        storage_path: storagePath
+      }
+    }))
+
+    const file_metadata = uploadResults.filter(Boolean)
+    const upload_failures = uploadResults.length - file_metadata.length
+
+    const { error: updateError } = await supabase
+      .from('applications')
+      .update({ file_metadata, documents_incomplete: upload_failures > 0 })
+      .eq('id', applicationId)
+    if (updateError) {
+      console.error(`[submit:bg] failed to patch file_metadata for ${reference_id}:`, updateError.message)
+    }
+
+    try {
+      const appRecord = { reference_id, full_name: formData.firstName + ' ' + formData.lastName, loan_type: formData.loanType, loan_amount: formData.loanAmount, phone: formData.mobile }
+      await notifyTeamByRole('verifier', appRecord, { message: 'New application ready for verification' })
+    } catch (hookErr) {
+      console.error('[submit:bg] Email hook error:', hookErr.message)
+    }
+  } catch (err) {
+    console.error(`[submit:bg] file processing failed for ${reference_id}:`, err.message)
+  }
+}
+
 // Test routes (keep for debugging)
 router.post('/test-loandisk', async (req, res) => {
   try {
@@ -255,56 +309,21 @@ router.post('/submit', handleUpload, async (req, res) => {
     const finscore_raw = finScore.score || 0
     const finscore_normalized = finScore.normalized || 0
 
-    // Step 5 — Compress and upload files to Supabase Storage
+    // Step 5 — Persist immediately, defer file processing off the request path
+    // (C). FinScore has already validated the phone, so the record can be saved
+    // and acknowledged now; compress + upload (the slow ~70-100s part) runs in
+    // processSubmitFiles after the response and patches file_metadata in.
     const reference_id = 'GR8-' + Date.now()
     const folderName = `${reference_id}_${formData.firstName}-${formData.lastName}`
-    const compressedFiles = await compressFiles(files)
-
-    // Upload all files concurrently (was serial — 6 sequential uploads pushed
-    // the public /submit past the client timeout, causing 499 aborts and lost
-    // applications). Promise.all collapses the wall-clock to the slowest single
-    // upload instead of their sum.
-    const uploadResults = await Promise.all(compressedFiles.map(async (file) => {
-      const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
-      // Derive contentType from the file's magic bytes, not the client-declared
-      // mimetype (M2). A client could otherwise label an SVG/HTML as image/jpeg
-      // and get stored XSS when the file is later served. Unknown types fall back
-      // to octet-stream so they download instead of rendering inline.
-      const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
-      const { error: uploadError } = await supabase.storage
-        .from('application-files')
-        .upload(storagePath, file.buffer, {
-          contentType,
-          upsert: false
-        })
-
-      if (uploadError) {
-        // H3: a dropped upload used to vanish silently, leaving the app
-        // persisted with missing KYC docs. Track it and flag the row so the
-        // pipeline blocks advance instead of pushing an incomplete record.
-        console.error('File upload error:', uploadError.message)
-        return null
-      }
-
-      return {
-        field_name: file.fieldname,
-        original_name: file.originalname,
-        original_size: file.originalSize || file.size,
-        size: file.size,
-        storage_path: storagePath
-      }
-    }))
-
-    const file_metadata = uploadResults.filter(Boolean)
-    const upload_failures = uploadResults.length - file_metadata.length
 
     // Step 6 — Extract consent
     const consent_agreed = formData.consentAgreed === 'true' || formData.consentAgreed === true
     const consent_agreed_at = new Date().toISOString()
 
-    // Step 7 — Save to Supabase
-
-    const { error } = await supabase
+    // Step 7 — Save to Supabase (files not yet uploaded → documents_incomplete
+    // starts true so the pipeline can't advance until the background task fills
+    // file_metadata in).
+    const { data: inserted, error } = await supabase
       .from('applications')
       .insert({
         reference_id,
@@ -320,15 +339,17 @@ router.post('/submit', handleUpload, async (req, res) => {
         status: 'pending',
         stage: 'verifier',
         assigned_sales_officer,
-        file_metadata,
+        file_metadata: [],
         consent_agreed,
         consent_agreed_at,
         prior_decline_flag,
         prior_decline_reference,
         application_category,
         linked_borrower_id,
-        documents_incomplete: upload_failures > 0
+        documents_incomplete: true
       })
+      .select('id')
+      .single()
 
     if (error) {
       // H7: the pending-phone SELECT above is non-atomic; a concurrent submit
@@ -343,18 +364,15 @@ router.post('/submit', handleUpload, async (req, res) => {
       throw error
     }
 
-    // Email notification — errors won't fail the response
-    try {
-      const appRecord = { reference_id, full_name: formData.firstName + ' ' + formData.lastName, loan_type: formData.loanType, loan_amount: formData.loanAmount, phone: formData.mobile };
-      await notifyTeamByRole('verifier', appRecord, { message: 'New application ready for verification' });
-    } catch (hookErr) {
-      console.error('[submit] Email hook error:', hookErr.message);
-    }
-
-    return res.status(200).json({
+    // Acknowledge now — file processing + verifier email continue in the
+    // background (see processSubmitFiles). Not awaited by design.
+    res.status(200).json({
       status: 'success',
       referenceId: reference_id
     })
+
+    processSubmitFiles({ applicationId: inserted.id, reference_id, folderName, files, formData })
+    return
 
   } catch (error) {
     console.error('Submit error:', error.message)
