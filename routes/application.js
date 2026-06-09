@@ -86,7 +86,7 @@ function preQualify(formData) {
     sme: 30000,
     akap: 10000
   }
-  const required = minIncome[formData.loanType] || 0
+  const required = minIncome[loanType] || 0
   if (income < required) {
     reasons.push(`Minimum monthly income for this loan is ₱${required.toLocaleString()}`)
   }
@@ -98,7 +98,7 @@ function preQualify(formData) {
     sme:      { min: 50000, max: 300000 },
     akap:     { min: 5000,  max: 40000 }
   }
-  const limit = limits[formData.loanType]
+  const limit = limits[loanType]
   if (limit && (amount < limit.min || amount > limit.max)) {
     reasons.push(`Loan amount must be between ₱${limit.min.toLocaleString()} and ₱${limit.max.toLocaleString()}`)
   }
@@ -258,11 +258,13 @@ router.post('/submit', handleUpload, async (req, res) => {
     // Step 5 — Compress and upload files to Supabase Storage
     const reference_id = 'GR8-' + Date.now()
     const folderName = `${reference_id}_${formData.firstName}-${formData.lastName}`
-    const file_metadata = []
-    let upload_failures = 0
     const compressedFiles = await compressFiles(files)
 
-    for (const file of compressedFiles) {
+    // Upload all files concurrently (was serial — 6 sequential uploads pushed
+    // the public /submit past the client timeout, causing 499 aborts and lost
+    // applications). Promise.all collapses the wall-clock to the slowest single
+    // upload instead of their sum.
+    const uploadResults = await Promise.all(compressedFiles.map(async (file) => {
       const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
       // Derive contentType from the file's magic bytes, not the client-declared
       // mimetype (M2). A client could otherwise label an SVG/HTML as image/jpeg
@@ -281,18 +283,20 @@ router.post('/submit', handleUpload, async (req, res) => {
         // persisted with missing KYC docs. Track it and flag the row so the
         // pipeline blocks advance instead of pushing an incomplete record.
         console.error('File upload error:', uploadError.message)
-        upload_failures++
-        continue
+        return null
       }
 
-      file_metadata.push({
+      return {
         field_name: file.fieldname,
         original_name: file.originalname,
         original_size: file.originalSize || file.size,
         size: file.size,
         storage_path: storagePath
-      })
-    }
+      }
+    }))
+
+    const file_metadata = uploadResults.filter(Boolean)
+    const upload_failures = uploadResults.length - file_metadata.length
 
     // Step 6 — Extract consent
     const consent_agreed = formData.consentAgreed === 'true' || formData.consentAgreed === true
@@ -513,11 +517,11 @@ router.post('/submit-group', handleUpload, async (req, res) => {
     const reference_id = 'GR8-' + Date.now()
     const folderName = `${reference_id}_${leader.firstName}-${leader.lastName}`
 
-    const file_metadata = []
-    let upload_failures = 0
     const compressedFiles = await compressFiles(files)
 
-    for (const file of compressedFiles) {
+    // Upload all files concurrently — see /submit note above. Serial uploads on
+    // a multi-member group push the request well past the client timeout.
+    const uploadResults = await Promise.all(compressedFiles.map(async (file) => {
       const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
       // contentType from magic bytes, not client-declared mimetype (M2).
       const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
@@ -530,18 +534,20 @@ router.post('/submit-group', handleUpload, async (req, res) => {
 
       if (uploadError) {
         console.error('File upload error:', uploadError.message)
-        upload_failures++
-        continue
+        return null
       }
 
-      file_metadata.push({
+      return {
         field_name: file.fieldname,
         original_name: file.originalname,
         original_size: file.originalSize || file.size,
         size: file.size,
         storage_path: storagePath
-      })
-    }
+      }
+    }))
+
+    const file_metadata = uploadResults.filter(Boolean)
+    const upload_failures = uploadResults.length - file_metadata.length
 
     const consent_agreed = req.body.consentAgreed === 'true' || req.body.consentAgreed === true
     const consent_agreed_at = new Date().toISOString()
