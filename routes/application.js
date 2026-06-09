@@ -369,6 +369,11 @@ router.post('/submit', handleUpload, async (req, res) => {
 router.post('/submit-group', handleUpload, async (req, res) => {
   try {
     const { loanType, totalLoanAmount, groupName } = req.body
+    // Normalized key for type gates/lookups only (L1 parity with /submit's
+    // preQualify). The raw `loanType` is still what gets stored on the row, so
+    // a mixed-case payload no longer skips the member-count and amount checks
+    // while DB values + downstream scheme logic stay unchanged.
+    const loanTypeKey = String(loanType || '').trim().toLowerCase()
     const loanTerm = req.body.paymentTerm || req.body.loanTerm
     const members = typeof req.body.members === 'string'
       ? JSON.parse(req.body.members)
@@ -379,13 +384,13 @@ router.post('/submit-group', handleUpload, async (req, res) => {
     // missing members array would otherwise crash on leader.mobile below,
     // making the per-type minimum checks unreachable (the sbl<1 branch).
     if (!Array.isArray(members) || members.length === 0) {
-      const minLabel = loanType === 'group' ? 'at least 5 members' : 'at least 1 member'
+      const minLabel = loanTypeKey === 'group' ? 'at least 5 members' : 'at least 1 member'
       return res.status(200).json({ status: 'declined', reasons: [`This loan requires ${minLabel}`] })
     }
-    if (loanType === 'group' && members.length < 5) {
+    if (loanTypeKey === 'group' && members.length < 5) {
       return res.status(200).json({ status: 'declined', reasons: ['Group Loan requires at least 5 members'] })
     }
-    if (loanType === 'sbl' && members.length < 1) {
+    if (loanTypeKey === 'sbl' && members.length < 1) {
       return res.status(200).json({ status: 'declined', reasons: ['SBL requires at least 1 member'] })
     }
     // Upper bound (L3/H9): each member triggers a billed FinScore call fanned
@@ -459,7 +464,7 @@ router.post('/submit-group', handleUpload, async (req, res) => {
     const memberErrors = []
     members.forEach((member, i) => {
       // Per-member loan amount check
-      const memberLimit = perMemberLimits[loanType]
+      const memberLimit = perMemberLimits[loanTypeKey]
       if (memberLimit) {
         const memberAmount = parseFloat(member.loanAmount) || 0
         if (memberAmount < memberLimit.min || memberAmount > memberLimit.max) {
