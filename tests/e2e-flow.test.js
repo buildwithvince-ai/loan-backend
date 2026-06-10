@@ -738,9 +738,9 @@ async function run() {
     check('createLoan payload: rate clamped to 5.0', Number(clampedLoan.interest_rate) === 5.0, JSON.stringify(clampedLoan.interest_rate));
     check('clamped approval advanced stage to LPO', db.applications.find((a) => a.id === r.id).stage === 'loan_processing_officer', db.applications.find((a) => a.id === r.id).stage);
 
-    // confirm-terms happy path: adjusted 30000 → SA confirms → reaches LPO with
-    // the OVERRIDDEN principal (30000, not the original 25000). This exercises
-    // meta.principal/duration override in executeLoandiskApproval.
+    // confirm-terms happy path: adjusted 30000 → SA confirms → ball returns to
+    // approver (pending @ approver, terms adopted, NO push) → approver's final
+    // /approve runs the Loandisk push with the ADOPTED principal (30000).
     FINSCORE['09192223333'] = { score: 540, normalized: 90, noScore: false };
     await postForm('/api/application/submit', validForm({ mobile: '09192223333', loanAmount: '25000', paymentTerm: '12' }));
     const ct = db.applications.find((a) => a.phone === '09192223333' && a.status === 'pending');
@@ -748,10 +748,18 @@ async function run() {
     await jsonReq('PATCH', `/api/admin/applications/${ct.id}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
     const ctAdj = await jsonReq('PATCH', `/api/admin/applications/${ct.id}/approve`, { adjusted_amount: 30000, loan_release_date: RELEASE_DATE }, authH('approver'));
     check('confirm-terms setup → pending_sa_confirmation', ctAdj.body.status === 'pending_sa_confirmation', JSON.stringify(ctAdj.body));
+    const pushesBeforeConfirm = loandiskCalls.createLoan.length;
     const ctConfirm = await jsonReq('PATCH', `/api/admin/applications/${ct.id}/confirm-terms`, {}, authH('approver'));
-    check('confirm-terms → reaches loan_processing_officer', ctConfirm.body.stage === 'loan_processing_officer', JSON.stringify({ st: ctConfirm.body.stage }));
+    check('confirm-terms → back to pending @ approver', ctConfirm.body.status === 'pending' && ctConfirm.body.stage === 'approver', JSON.stringify({ s: ctConfirm.body.status, st: ctConfirm.body.stage }));
+    check('confirm-terms adopted loan_amount 30000', Number(ctConfirm.body.loan_amount) === 30000, JSON.stringify(ctConfirm.body.loan_amount));
+    check('no Loandisk push on confirm-terms', loandiskCalls.createLoan.length === pushesBeforeConfirm, 'createLoan was called');
+    const ctRow = db.applications.find((a) => a.id === ct.id);
+    check('proposal fields cleared after confirm', ctRow.approver_proposed_amount == null && ctRow.approver_proposed_term == null, JSON.stringify({ a: ctRow.approver_proposed_amount, t: ctRow.approver_proposed_term }));
+    check('sa_confirmation logged in stage_history', Array.isArray(ctRow.stage_history) && ctRow.stage_history.some((h) => h.type === 'sa_confirmation'), JSON.stringify(ctRow.stage_history));
+    const ctFinal = await jsonReq('PATCH', `/api/admin/applications/${ct.id}/approve`, { loan_release_date: RELEASE_DATE }, authH('approver'));
+    check('final approve after confirm → approved', ctFinal.status === 200 && ctFinal.body.status === 'approved', JSON.stringify(ctFinal.body));
     const ctLoan = loandiskCalls.createLoan[loandiskCalls.createLoan.length - 1];
-    check('confirm-terms used overridden principal 30000 (not 25000)', Number(ctLoan.principal) === 30000, JSON.stringify(ctLoan.principal));
+    check('final push used adopted principal 30000 (not 25000)', Number(ctLoan.principal) === 30000, JSON.stringify(ctLoan.principal));
   }
 
   // -----------------------------------------------------------------------

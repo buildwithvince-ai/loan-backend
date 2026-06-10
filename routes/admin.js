@@ -370,8 +370,9 @@ router.patch('/applications/:id/override', requireRole('admin', 'super_admin', '
 //   interest_rate, payment_scheme_id, discount_reason
 // Adjusted-terms loop (Issue 3):
 //   adjusted_amount, adjusted_term — when either differs from the original
-//   loan_amount/loan_term, status flips to `pending_sa_confirmation` and the
-//   Loandisk push is deferred until the SA confirms via /confirm-terms.
+//   loan_amount/loan_term, status flips to `pending_sa_confirmation`. The SA
+//   confirms via /confirm-terms which adopts the terms and returns the app to
+//   the approver; the Loandisk push happens on the approver's final /approve.
 router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     // Supervisor-override gate for auto-declined applications.
@@ -510,8 +511,10 @@ router.patch('/applications/:id/approve', requireRole('admin', 'super_admin', 'a
 })
 
 // Confirm proposed adjusted terms — SA-only.
-// Reads the persisted approver_proposed_amount/term, runs the deferred
-// Loandisk push with those values, and advances the stage.
+// Adopts the persisted approver_proposed_amount/term as the official
+// loan_amount/loan_term, then returns the ball to the approver
+// (status `pending`, stage `approver`) for final approval. The Loandisk
+// push only happens when the approver approves again via /approve.
 router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admin', 'approver'), async (req, res) => {
   try {
     const { data: current, error: fetchErr } = await supabase
@@ -532,31 +535,50 @@ router.patch('/applications/:id/confirm-terms', requireRole('admin', 'super_admi
       return res.status(400).json({ error: 'No proposed terms recorded on this application' })
     }
 
-    const { transitionStage } = require('../services/pipeline')
-    const meta = {
-      principal: current.approver_proposed_amount,
-      duration_months: current.approver_proposed_term,
-      interest_rate: req.body?.interest_rate,
-      payment_scheme_id: req.body?.payment_scheme_id,
-      discount_reason: req.body?.discount_reason
+    const history = Array.isArray(current.stage_history) ? current.stage_history : []
+    const confirmationEntry = {
+      type: 'sa_confirmation',
+      by: req.user?.id || null,
+      by_name: req.user?.full_name || null,
+      at: new Date().toISOString(),
+      meta: {
+        confirmed_amount: current.approver_proposed_amount,
+        confirmed_term: current.approver_proposed_term
+      }
     }
 
-    // Adopt the proposed values as the official loan_amount / loan_term before
-    // transitioning, so downstream reads see the confirmed numbers. Also accept
-    // a loan_release_date override here (falls back to the one persisted at the
-    // adjusted-terms approve step).
+    // Adopt the proposed values as the official loan_amount / loan_term and
+    // clear the proposal fields so the approver's final /approve runs the
+    // direct branch (no diff → no second pending_sa_confirmation loop). Also
+    // accept a loan_release_date override here (falls back to the one
+    // persisted at the adjusted-terms approve step).
     const confirmReleaseDate = req.body?.loan_release_date || null
-    await supabase
+    const { data: updated, error: updateErr } = await supabase
       .from('applications')
       .update({
         loan_amount: current.approver_proposed_amount,
         loan_term: current.approver_proposed_term,
-        ...(confirmReleaseDate ? { loan_release_date: confirmReleaseDate } : {})
+        status: 'pending',
+        stage: 'approver',
+        approver_proposed_amount: null,
+        approver_proposed_term: null,
+        approver_proposed_at: null,
+        approver_proposed_by: null,
+        ...(confirmReleaseDate ? { loan_release_date: confirmReleaseDate } : {}),
+        stage_history: [...history, confirmationEntry]
       })
       .eq('id', req.params.id)
+      .select()
+      .single()
 
-    const updated = await transitionStage(req.params.id, 'loan_processing_officer', req.user, meta)
-    return res.json(updated)
+    if (updateErr) throw updateErr
+    return res.json({
+      status: updated.status,
+      stage: updated.stage,
+      loan_amount: updated.loan_amount,
+      loan_term: updated.loan_term,
+      message: 'Terms confirmed — returned to approver for final approval.'
+    })
   } catch (error) {
     console.error('Confirm-terms error:', error.message)
     return res.status(400).json({ error: error.message })
