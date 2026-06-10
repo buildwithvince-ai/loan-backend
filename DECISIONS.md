@@ -223,3 +223,41 @@ Chronological record of major architectural decisions, pivots, and tradeoffs. Ea
 - `app.set('trust proxy', 1)` so the limiter keys on the real client IP behind Railway's edge.
 
 Tuned for low-volume lending traffic; tight enough to slow scrapers, generous enough not to bite real users.
+
+---
+
+## 016 — Submit Latency Fix (499 client-abort) + Background-Upload PR
+**Date:** 2026-06-09
+**Status:** A shipped to `main`. C parked in open PR (do not merge yet).
+
+### Trigger
+A sales officer reported: PL application submitted fine, then AKAP "failed — something went wrong." Investigated via Railway HTTP logs.
+
+### Root cause (diagnosed, not guessed)
+The AKAP submit was **HTTP 499 — client aborted after 181s**, not a backend error. The "successful" PL submit took **107s** — it barely beat the browser timeout. `/submit` ran FinScore (≤35s) + **serial** Supabase Storage uploads (6 KYC images) synchronously before responding; slow Storage pushed total request time past the client timeout.
+- "Something went wrong" = the **frontend's** timeout/abort handler, NOT the backend 500 at `application.js` catch.
+- The aborted AKAP application was **never saved** (zero AKAP rows in DB that day → SA had to resubmit).
+- NOT AKAP-specific, NOT the pre-qual case bug. Pure latency.
+
+Evidence (Railway HTTP, `POST /api/application/submit`): `08:03 200 107159ms` (PL, saved) · `08:15 499 180996ms` (AKAP, lost) · fast `200`s in between were early-exits (declines / "already under review", no row).
+
+### What shipped to `main`
+- **A — parallelize uploads** (commit `0189ee6`): both `/submit` and `/submit-group` upload loops → `Promise.all` instead of serial `for`. Wall-clock = slowest single upload, not the sum.
+- **Pre-qual case fix** (`0189ee6`): `preQualify()` income/amount lookups now use the normalized lowercase `loanType` (was indexing raw `formData.loanType` while the allowlist used lowercase → a mixed-case type could skip the income/amount gates). Single-member only.
+- **Group/SBL case fix** (commit `2de6151`): `/submit-group` member-count + `perMemberLimits` gates now use a normalized `loanTypeKey`; **stored** `loan_type` / group metadata / email payloads keep the raw value, so DB rows + downstream scheme logic are unchanged. e2e harness: 103/103 pass.
+
+### What's parked — PR #1 (`perf/async-submit-uploads`)
+**C — respond before upload (background processing) on `/submit` only.** Insert row as `pending` + `documents_incomplete=true`, return `200` immediately, then `processSubmitFiles()` compresses+uploads+patches `file_metadata`+emails verifier off the request path. Cuts client wait to ~FinScore-only.
+
+**Decision: HOLD, don't merge.** A likely already fixes the acute timeout; C adds a fire-and-forget in-memory background task with a durability tradeoff (process restart mid-upload = row flagged incomplete, files gone, manual re-upload). Review notes are a comment on PR #1.
+
+### Resume / merge criteria (THE OPEN ITEM)
+Watch `/submit` HTTP logs in prod over the next batch of real submissions:
+- **Zero `499`s on A alone + acceptable latency → CLOSE PR #1.** C not needed.
+- **Still timing out (499s recur) → MERGE C**, and pair with: (1) durable job queue (pg-boss/Redis) follow-up, (2) a `/submit-group` equivalent (C is `/submit` only).
+
+How to pull the signal: Railway CLI (linked: project `gr8-backend`, service `loan-backend`, env `production`):
+`railway logs --http --since <window> --lines 5000 | grep "POST /api/application/submit"` — check the status column for `499`/`5xx`.
+
+### Adjacent gap flagged, NOT fixed (decide later)
+`/submit-group` has no loan-type **allowlist** (the L1 guard `/submit` has via `SINGLE_MEMBER_LOAN_TYPES`). An unexpected type sent to the group route skips the member/amount gates rather than being rejected. Separate from the casing fix.
