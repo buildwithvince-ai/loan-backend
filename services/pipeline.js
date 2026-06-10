@@ -107,10 +107,28 @@ async function executeLoandiskApproval(application, user, meta = {}) {
     // values on the row, then the persisted loan_amount/loan_term.
     const principal = Number(meta.principal ?? fullApp.approver_proposed_amount ?? fullApp.loan_amount);
     const duration_months = Number(meta.duration_months ?? fullApp.approver_proposed_term ?? fullApp.loan_term);
-    // Per-loan-type default interest rate (Personal 3.5, SME 3.0, AKAP 4.0,
-    // Group/SBL 5.0). Overridable when approver passes meta.interest_rate.
+    // Per-loan-type default interest rate (5.0 for all products since the
+    // 2026-06-09 hard-lock). Overridable when approver passes meta.interest_rate.
     const defaultRate = getDefaultInterestRate(fullApp.loan_type);
-    const interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
+    let interest_rate = meta.interest_rate != null ? Number(meta.interest_rate) : defaultRate;
+    // Clamp a client-sent rate into the configured band instead of rejecting it.
+    // With the band hard-locked at 5..5 every approve coerces to 5%, so a stale
+    // frontend still sending the old per-type default (e.g. Personal 3.5) no
+    // longer 400s the approval. If the band is ever widened again, in-band rates
+    // pass through untouched and the discount gate below still applies.
+    if (!Number.isFinite(interest_rate)) {
+      interest_rate = defaultRate;
+    } else {
+      const clamped = Math.min(Math.max(interest_rate, LOAN_DEFAULTS.min_interest_rate), LOAN_DEFAULTS.max_interest_rate);
+      if (clamped !== interest_rate) {
+        console.log('[pipeline:approve] interest_rate clamped to locked band', {
+          application_id: application.id,
+          requested: interest_rate,
+          applied: clamped
+        });
+        interest_rate = clamped;
+      }
+    }
     // Payment scheme: keyed off loan_type (confirmed by ops 2026-06-03) — Personal/
     // Group=semi-monthly(3413), SME/SBL=monthly(3), AKAP=weekly(4). An explicit
     // meta.payment_scheme_id (approver override) still wins; otherwise fall back to

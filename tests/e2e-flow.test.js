@@ -704,7 +704,7 @@ async function run() {
   }
 
   // -----------------------------------------------------------------------
-  section('APPROVE — discount gate + adjusted-terms (no Loandisk push)');
+  section('APPROVE — rate clamp + adjusted-terms (no Loandisk push)');
   // -----------------------------------------------------------------------
   {
     // discount below default without reason → blocked
@@ -719,9 +719,6 @@ async function run() {
     check('approve without loan_release_date → 400', noRelease.status === 400 && /loan_release_date is required/.test(noRelease.body.error), JSON.stringify(noRelease.body));
     check('missing-release approval did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
 
-    const denied = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { interest_rate: 2.0, loan_release_date: RELEASE_DATE }, authH('approver'));
-    check('rate below default w/o discount_reason → 400', denied.status === 400 && /discount_reason is required/.test(denied.body.error), JSON.stringify(denied.body));
-    check('blocked approval did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
     const callsBefore = loandiskCalls.createLoan.length;
 
     // adjusted amount differs → pending_sa_confirmation, NO Loandisk push
@@ -732,6 +729,14 @@ async function run() {
     // reject-terms → back to pending/approver
     const rej = await jsonReq('PATCH', `/api/admin/applications/${r.id}/reject-terms`, { note: 'Amount too high for income' }, authH('approver'));
     check('reject-terms → back to pending @ approver', rej.body.status === 'pending' && rej.body.stage === 'approver', JSON.stringify({ s: rej.body.status, st: rej.body.stage }));
+
+    // Out-of-band rate is clamped into the locked band (5..5), not rejected —
+    // a stale frontend sending the old per-type default must not block approval.
+    const clamped = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { interest_rate: 2.0, loan_release_date: RELEASE_DATE }, authH('approver'));
+    check('out-of-band rate → approve succeeds (clamped)', clamped.status === 200 && clamped.body.status === 'approved', JSON.stringify(clamped.body));
+    const clampedLoan = loandiskCalls.createLoan[loandiskCalls.createLoan.length - 1];
+    check('createLoan payload: rate clamped to 5.0', Number(clampedLoan.interest_rate) === 5.0, JSON.stringify(clampedLoan.interest_rate));
+    check('clamped approval advanced stage to LPO', db.applications.find((a) => a.id === r.id).stage === 'loan_processing_officer', db.applications.find((a) => a.id === r.id).stage);
 
     // confirm-terms happy path: adjusted 30000 → SA confirms → reaches LPO with
     // the OVERRIDDEN principal (30000, not the original 25000). This exercises

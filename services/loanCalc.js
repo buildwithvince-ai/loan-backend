@@ -139,8 +139,8 @@ function validateLoanInputs(input) {
   }
 
   // Discount reason required when rate is below the per-loan-type default
-  // (Personal 3.5, SME 3.0, AKAP 4.0, Group/SBL 5.0). Falls back to
-  // LOAN_DEFAULTS.interest_rate for unrecognised loan types.
+  // (5.0 for all products since the 2026-06-09 hard-lock; unreachable while
+  // min==max). Falls back to LOAN_DEFAULTS.interest_rate for unrecognised types.
   const typeDefault = getDefaultInterestRate(loan_type);
   if (Number.isFinite(r) && r < typeDefault) {
     if (!discount_reason || !String(discount_reason).trim()) {
