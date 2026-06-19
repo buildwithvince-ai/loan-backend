@@ -2,11 +2,12 @@ const express = require('express')
 const multer = require('multer')
 const router = express.Router()
 // Bound the public upload path (H9): unbounded memoryStorage + upload.any()
-// let a caller buffer arbitrary files in RAM. Cap each file at 5MB and the
-// count at 12 (a full KYC set is well under that). Files cap also bounds the
-// concurrent sharp decode in compressFiles.
+// let a caller buffer arbitrary files in RAM. Cap each file at 5MB. The file
+// count must cover a full group: observed groups run <=6 members × ~6 files,
+// so 60 (10 members × 6) covers the real range with headroom while capping
+// worst-case buffered RAM at ~300MB. Also bounds concurrent sharp decodes.
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-const MAX_UPLOAD_FILES = 12
+const MAX_UPLOAD_FILES = 60
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_UPLOAD_FILES }
