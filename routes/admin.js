@@ -16,14 +16,48 @@ router.use(verifyToken)
 // role; per-applicant ownership scoping is a separate follow-up (see report).
 const READ_ROLES = ['super_admin', 'admin', 'approver', 'verifier', 'ci_officer', 'sales_officer', 'loan_processing_officer']
 
-// List all applications
+// Columns the dashboard list + kanban actually consume. Excludes the heavy
+// jsonb columns (group_members, stage_history, ci_form_data, file_metadata) —
+// group rows each carry the FULL group_members array, so a 30-member group is
+// ~30KB × 30 rows in the old select('*') payload. form_data stays: the kanban
+// card reads form_data.groupName and the name helpers fall back to it.
+const LIST_FIELDS = [
+  'id', 'reference_id', 'phone', 'full_name', 'email', 'loan_type',
+  'loan_amount', 'loan_term', 'form_data', 'finscore_raw', 'finscore_normalized',
+  'ci_score', 'ci_normalized', 'final_score', 'tier', 'status', 'stage',
+  'assigned_sales_officer', 'application_category', 'linked_borrower_id',
+  'documents_incomplete', 'prior_decline_flag', 'prior_decline_reference',
+  'manual_override', 'sa_rejection_note', 'so_confirmation_sent_at',
+  'so_decision', 'so_decision_at', 'returned_count', 'last_return_reason',
+  'loandisk_borrower_id', 'loandisk_loan_id', 'approver_proposed_amount',
+  'approver_proposed_term', 'ci_recommendation', 'ci_recommended_amount',
+  'interviewer', 'submitted_at', 'reviewed_at'
+].join(', ')
+
+// List all applications.
+// Default (no query params): full list as a bare array — the dashboard kanban
+// and client-side filters poll this shape every 30s; do not change it.
+// Opt-in pagination: ?limit=&page= returns { applications, total, page, limit }
+// (the frontend list already tolerates the object envelope).
 router.get('/applications', requireRole(...READ_ROLES), async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const wantsPagination = req.query.limit != null || req.query.page != null
+
+    let query = supabase
       .from('applications')
-      .select('*')
+      .select(LIST_FIELDS, wantsPagination ? { count: 'exact' } : {})
       .order('submitted_at', { ascending: false })
 
+    if (wantsPagination) {
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200)
+      const page = Math.max(Number(req.query.page) || 1, 1)
+      const from = (page - 1) * limit
+      const { data, error, count } = await query.range(from, from + limit - 1)
+      if (error) throw error
+      return res.json({ applications: data, total: count, page, limit })
+    }
+
+    const { data, error } = await query
     if (error) throw error
     return res.json(data)
   } catch (error) {

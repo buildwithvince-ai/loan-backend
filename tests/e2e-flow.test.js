@@ -200,7 +200,7 @@ for (const fn of ['sendEmail', 'notifySalesOfficer', 'notifyTeamByRole', 'notify
 }
 
 const loandiskSvc = require('../services/loandisk');
-const loandiskCalls = { createBorrower: [], createLoan: [], uploadAllFiles: [] };
+const loandiskCalls = { createBorrower: [], createLoan: [], uploadAllFiles: [], uploadFile: [] };
 loandiskSvc.createBorrower = async (formData, finScore) => {
   loandiskCalls.createBorrower.push({ formData, finScore });
   return 'LD-BORROWER-999';
@@ -208,6 +208,10 @@ loandiskSvc.createBorrower = async (formData, finScore) => {
 loandiskSvc.uploadAllFiles = async (borrowerId, files) => {
   loandiskCalls.uploadAllFiles.push({ borrowerId, count: files.length });
   return files.map((_, i) => `file-${i}`);
+};
+loandiskSvc.uploadFile = async (borrowerId, fileName) => {
+  loandiskCalls.uploadFile.push({ borrowerId, fileName });
+  return `file-${loandiskCalls.uploadFile.length}`;
 };
 loandiskSvc.createLoan = async (input) => {
   loandiskCalls.createLoan.push(input);

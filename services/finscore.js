@@ -119,6 +119,7 @@ async function getScore(mobileNumber) {
     const requestId = Date.now().toString()
 
     console.log(`FinScore request — mobile: ${maskMobile(converted)}, product: ${productId}`)
+    const start = Date.now()
 
     const response = await axios.post(
       process.env.FINSCORE_SCORE_URL,
@@ -135,6 +136,8 @@ async function getScore(mobileNumber) {
         timeout: 25000
       }
     )
+
+    console.log(`FinScore response — elapsed=${Date.now() - start}ms`)
 
     if (FINSCORE_DEBUG) {
       console.log('FinScore full response:', JSON.stringify(response.data, null, 2))

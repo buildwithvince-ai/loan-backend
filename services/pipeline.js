@@ -1,7 +1,7 @@
 'use strict';
 
 const { supabase } = require('./supabase');
-const { createBorrower, createLoan, uploadAllFiles, schemeIdFromLoanType, isoToMMDDYYYY } = require('./loandisk');
+const { createBorrower, createLoan, uploadFile, schemeIdFromLoanType, isoToMMDDYYYY } = require('./loandisk');
 const { calculateFirstRepaymentDate } = require('./repayment');
 const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
 const { getProductConfig, getDefaultInterestRate, LOAN_DEFAULTS } = require('../config/loanProducts');
@@ -198,31 +198,34 @@ async function executeLoandiskApproval(application, user, meta = {}) {
     }
 
     // Files: only upload for fresh borrowers. Renewals already have docs in Loandisk.
+    // Transfer runs download+upload per file, FILE_TRANSFER_CONCURRENCY at a
+    // time — fully serial transfer on a 60-file group holds the approval HTTP
+    // request through 120+ sequential external calls and times out the
+    // dashboard client. Semantics match the old serial loop: a failed download
+    // skips that file (logged), a failed Loandisk upload aborts the approval.
     if (!isRenewal) {
       const fileMetadata = fullApp.file_metadata || [];
-      if (fileMetadata.length > 0) {
-        const filesToUpload = [];
-        for (const fileMeta of fileMetadata) {
+      const FILE_TRANSFER_CONCURRENCY = 4;
+      let uploadedCount = 0;
+      for (let i = 0; i < fileMetadata.length; i += FILE_TRANSFER_CONCURRENCY) {
+        const batch = fileMetadata.slice(i, i + FILE_TRANSFER_CONCURRENCY);
+        await Promise.all(batch.map(async (fileMeta) => {
           const { data: fileData, error: downloadError } = await supabase.storage
             .from('application-files')
             .download(fileMeta.storage_path);
 
           if (downloadError) {
             console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
-            continue;
+            return;
           }
 
           const buffer = Buffer.from(await fileData.arrayBuffer());
-          filesToUpload.push({
-            originalname: fileMeta.original_name,
-            buffer
-          });
-        }
-
-        if (filesToUpload.length > 0) {
-          await uploadAllFiles(borrowerId, filesToUpload);
-          console.log(`Uploaded ${filesToUpload.length} files to Loandisk for borrower ${borrowerId}`);
-        }
+          await uploadFile(borrowerId, fileMeta.original_name, buffer);
+          uploadedCount++;
+        }));
+      }
+      if (uploadedCount > 0) {
+        console.log(`Uploaded ${uploadedCount} files to Loandisk for borrower ${borrowerId}`);
       }
     }
 

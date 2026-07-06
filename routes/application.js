@@ -211,20 +211,39 @@ router.post('/submit', handleUpload, async (req, res) => {
     const formData = req.body
     const files = req.files || []
 
+    // Three independent pre-check reads batched in one round trip (perf review
+    // finding 5): SO validation, pending-duplicate check, prior-decline lookup.
+    // Same results and error handling as the previous serial version.
+    const [soCheckRes, existingRes, priorDeclinedRes] = await Promise.all([
+      formData.sales_officer_id
+        ? supabase
+            .from('admin_users')
+            .select('id')
+            .eq('id', formData.sales_officer_id)
+            .contains('roles', ['sales_officer'])
+            .eq('is_active', true)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase
+        .from('applications')
+        .select('id')
+        .eq('phone', formData.mobile)
+        .eq('status', 'pending')
+        .maybeSingle(),
+      supabase
+        .from('applications')
+        .select('reference_id')
+        .eq('phone', formData.mobile)
+        .eq('status', 'declined')
+        .order('submitted_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    ])
+
     // Validate sales_officer_id if provided
     let assigned_sales_officer = null;
-    if (formData.sales_officer_id) {
-      const { data: soCheck } = await supabase
-        .from('admin_users')
-        .select('id')
-        .eq('id', formData.sales_officer_id)
-        .contains('roles', ['sales_officer'])
-        .eq('is_active', true)
-        .maybeSingle();
-
-      if (soCheck) {
-        assigned_sales_officer = soCheck.id;
-      }
+    if (soCheckRes.data) {
+      assigned_sales_officer = soCheckRes.data.id;
     }
 
     // Renewal validation — accept application_category + linked_borrower_id
@@ -257,14 +276,7 @@ router.post('/submit', handleUpload, async (req, res) => {
     }
 
     // Step 1 — Check for existing pending application with same phone
-    const { data: existing } = await supabase
-      .from('applications')
-      .select('id')
-      .eq('phone', formData.mobile)
-      .eq('status', 'pending')
-      .maybeSingle()
-
-    if (existing) {
+    if (existingRes.data) {
       return res.status(200).json({
         status: 'error',
         message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
@@ -274,18 +286,9 @@ router.post('/submit', handleUpload, async (req, res) => {
     // Step 1b — Prior decline detection
     let prior_decline_flag = false
     let prior_decline_reference = null
-    const { data: priorDeclined } = await supabase
-      .from('applications')
-      .select('reference_id')
-      .eq('phone', formData.mobile)
-      .eq('status', 'declined')
-      .order('submitted_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (priorDeclined) {
+    if (priorDeclinedRes.data) {
       prior_decline_flag = true
-      prior_decline_reference = priorDeclined.reference_id
+      prior_decline_reference = priorDeclinedRes.data.reference_id
     }
 
     // Step 2 — Pre-qualification
@@ -427,30 +430,38 @@ router.post('/submit-group', handleUpload, async (req, res) => {
       return res.status(200).json({ status: 'declined', reasons: ['Group leader must have a valid mobile number (09XXXXXXXXX)'] })
     }
 
-    // Validate sales_officer_id if provided
-    let assigned_sales_officer = null;
-    if (req.body.sales_officer_id) {
-      const { data: soCheck } = await supabase
-        .from('admin_users')
+    // Independent pre-check reads batched in one round trip (perf review
+    // finding 5) — same shape as /submit above.
+    const [soCheckRes, existingRes, priorDeclinedRes] = await Promise.all([
+      req.body.sales_officer_id
+        ? supabase
+            .from('admin_users')
+            .select('id')
+            .eq('id', req.body.sales_officer_id)
+            .contains('roles', ['sales_officer'])
+            .eq('is_active', true)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase
+        .from('applications')
         .select('id')
-        .eq('id', req.body.sales_officer_id)
-        .contains('roles', ['sales_officer'])
-        .eq('is_active', true)
-        .maybeSingle();
+        .eq('phone', leader.mobile)
+        .eq('status', 'pending')
+        .maybeSingle(),
+      supabase
+        .from('applications')
+        .select('reference_id')
+        .eq('phone', leader.mobile)
+        .eq('status', 'declined')
+        .order('submitted_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    ])
 
-      if (soCheck) {
-        assigned_sales_officer = soCheck.id;
-      }
-    }
+    // Validate sales_officer_id if provided
+    const assigned_sales_officer = soCheckRes.data ? soCheckRes.data.id : null;
 
-    const { data: existing } = await supabase
-      .from('applications')
-      .select('id')
-      .eq('phone', leader.mobile)
-      .eq('status', 'pending')
-      .maybeSingle()
-
-    if (existing) {
+    if (existingRes.data) {
       return res.status(200).json({
         status: 'error',
         message: 'An application for this mobile number is already under review. Please wait for our team to contact you.'
@@ -460,18 +471,9 @@ router.post('/submit-group', handleUpload, async (req, res) => {
     // Prior decline detection for group leader
     let prior_decline_flag = false
     let prior_decline_reference = null
-    const { data: priorDeclinedGroup } = await supabase
-      .from('applications')
-      .select('reference_id')
-      .eq('phone', leader.mobile)
-      .eq('status', 'declined')
-      .order('submitted_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (priorDeclinedGroup) {
+    if (priorDeclinedRes.data) {
       prior_decline_flag = true
-      prior_decline_reference = priorDeclinedGroup.reference_id
+      prior_decline_reference = priorDeclinedRes.data.reference_id
     }
 
     const perMemberLimits = {

@@ -2,9 +2,15 @@ require('dotenv').config()
 
 const express = require('express')
 const cors = require('cors')
+const compression = require('compression')
 const rateLimit = require('express-rate-limit')
 
 const app = express()
+
+// Gzip JSON responses. The admin list payload is the main win — sizeable JSON
+// rows compress ~85%. Content-negotiated via Accept-Encoding, so non-gzip
+// clients are unaffected.
+app.use(compression())
 
 // Trust the Railway / proxy `X-Forwarded-For` so rate limiters key on the
 // real client IP rather than the proxy.
@@ -60,6 +66,18 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-ci-secret']
 }))
 app.use(express.json())
+
+// Per-request timing — answers "which endpoint is slow in production" from
+// Railway logs without redeploying instrumentation.
+app.use((req, res, next) => {
+  const start = Date.now()
+  res.on('finish', () => {
+    if (req.originalUrl.startsWith('/api/')) {
+      console.log(`[timing] ${req.method} ${req.originalUrl.split('?')[0]} ${res.statusCode} ${Date.now() - start}ms`)
+    }
+  })
+  next()
+})
 
 app.get('/', (req, res) => {
   res.json({ status: 'alive' })
