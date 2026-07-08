@@ -37,6 +37,24 @@ const { notifySalesOfficer, notifyTeamByRole } = require('../services/email')
 const SINGLE_MEMBER_LOAN_TYPES = ['personal', 'sme', 'akap']
 const MAX_GROUP_MEMBERS = 30
 
+// Supabase Storage rejects object keys containing non-ASCII characters (e.g. the
+// ñ in "Dela peña") and other special chars, returning "Invalid key". Any path
+// segment derived from user input — applicant names, original filenames — must
+// be normalized before it becomes part of a storage key, or the upload of every
+// file for that applicant silently fails and the application is stranded at the
+// documents_incomplete gate. Common for a PH lender: Peña, Muñoz, Niño, Ordoñez.
+// Strip diacritics (ñ→n, é→e) via NFKD, then replace anything outside a safe
+// ASCII set with '_'. reference_id (GR8-<timestamp>) is already key-safe.
+function safePathSegment(value) {
+  const cleaned = String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[_.]+|[_.]+$/g, '')
+  return cleaned || 'file'
+}
+
 // Block the unauthenticated /test-* helper routes in production. They invoke
 // real Loandisk/FinScore/email side effects and a destructive DB delete, so
 // they must never be reachable on the live deploy. Available only when
@@ -126,7 +144,7 @@ async function processSubmitFiles({ applicationId, reference_id, folderName, fil
   try {
     const compressedFiles = await compressFiles(files)
     const uploadResults = await Promise.all(compressedFiles.map(async (file) => {
-      const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
+      const storagePath = `${folderName}/${file.fieldname}_${safePathSegment(file.originalname)}`
       const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
       const { error: uploadError } = await supabase.storage
         .from('application-files')
@@ -318,7 +336,7 @@ router.post('/submit', handleUpload, async (req, res) => {
     // and acknowledged now; compress + upload (the slow ~70-100s part) runs in
     // processSubmitFiles after the response and patches file_metadata in.
     const reference_id = 'GR8-' + Date.now()
-    const folderName = `${reference_id}_${formData.firstName}-${formData.lastName}`
+    const folderName = `${reference_id}_${safePathSegment(formData.firstName)}-${safePathSegment(formData.lastName)}`
 
     // Step 6 — Extract consent
     const consent_agreed = formData.consentAgreed === 'true' || formData.consentAgreed === true
@@ -541,14 +559,14 @@ router.post('/submit-group', handleUpload, async (req, res) => {
     )
 
     const reference_id = 'GR8-' + Date.now()
-    const folderName = `${reference_id}_${leader.firstName}-${leader.lastName}`
+    const folderName = `${reference_id}_${safePathSegment(leader.firstName)}-${safePathSegment(leader.lastName)}`
 
     const compressedFiles = await compressFiles(files)
 
     // Upload all files concurrently — see /submit note above. Serial uploads on
     // a multi-member group push the request well past the client timeout.
     const uploadResults = await Promise.all(compressedFiles.map(async (file) => {
-      const storagePath = `${folderName}/${file.fieldname}_${file.originalname}`
+      const storagePath = `${folderName}/${file.fieldname}_${safePathSegment(file.originalname)}`
       // contentType from magic bytes, not client-declared mimetype (M2).
       const contentType = detectMimeFromMagic(file.buffer) || 'application/octet-stream'
       const { error: uploadError } = await supabase.storage
