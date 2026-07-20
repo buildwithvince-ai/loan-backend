@@ -59,7 +59,16 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow non-browser clients (curl, server-to-server) that send no Origin.
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
-    return callback(new Error('Not allowed by CORS'))
+    // Disallowed origin: signal "no CORS grant" rather than throwing. Throwing
+    // routes to Express's error handler and returns a 500 — which reads as a
+    // server crash, pollutes error monitoring, and masked a real config gap
+    // (a legitimate frontend origin missing from the allowlist surfaced as an
+    // outage of 500s). With (null, false) cors simply omits the
+    // Access-Control-Allow-Origin header: the browser blocks the response and
+    // the request completes cleanly, no 500. Log the rejected origin so a
+    // missing allowlist entry is diagnosable — add it via CORS_ORIGINS.
+    console.warn(`[cors] blocked disallowed origin: ${origin}`)
+    return callback(null, false)
   },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
