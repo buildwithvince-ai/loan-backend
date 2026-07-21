@@ -74,9 +74,9 @@ middleware/
 | PATCH | `/api/admin/applications/:id/approve` | JWT + role(admin, super_admin) | Approve → push to Loandisk |
 | PATCH | `/api/admin/applications/:id/decline` | JWT + role(admin, super_admin) | Decline application |
 | GET | `/api/admin/export/consent` | JWT + role(admin, super_admin) | Export consent data |
-| GET | `/api/ci/applications` | `x-ci-secret` | List pending (limited fields) |
-| GET | `/api/ci/applications/phone/:phone` | `x-ci-secret` | CI lookup by phone |
-| PATCH | `/api/ci/applications/:id/ci-score` | `x-ci-secret` | Submit CI score (limited response) |
+| GET | `/api/ci/applications` | JWT + role(ci_officer, admin, super_admin, approver) | List pending (limited fields) |
+| GET | `/api/ci/applications/phone/:phone` | JWT + role(ci_officer, admin, super_admin, approver) | CI lookup by phone |
+| PATCH | `/api/ci/applications/:id/ci-score` | JWT + role(ci_officer, admin, super_admin, approver) | Submit CI score (limited response) |
 | GET/PATCH | `/api/users/*` | Bearer JWT | Admin user CRUD |
 | PATCH | `/api/pipeline/:id/transition` | Bearer JWT | Advance pipeline stage |
 | GET | `/api/pipeline/:id/history` | Bearer JWT | Stage transition history |
@@ -102,7 +102,6 @@ FINSCORE_CLIENT_ID        # username
 FINSCORE_CLIENT_SECRET    # password
 FINSCORE_AUTH_URL          # OAuth2 token endpoint
 FINSCORE_SCORE_URL         # Score API endpoint
-CI_SECRET                 # x-ci-secret header value
 ADMIN_SECRET              # x-admin-secret header value (matches frontend VITE_ADMIN_SECRET)
 ZEPTO_API_URL             # ZeptoMail endpoint (defaults to v1.1)
 ZEPTO_API_TOKEN           # Zoho-enczapikey token
@@ -154,7 +153,7 @@ Age requirement: 21–65 for all types. Mobile format: `09XXXXXXXXX`.
 - DB columns/API payloads: snake_case
 - Async: async/await throughout
 - Error handling: try-catch with console.error, safe fallbacks on external API failures
-- Auth: JWT via Supabase Auth for admin routes, `x-ci-secret` header for CI routes, public routes unauthenticated
+- Auth: JWT via Supabase Auth for admin + CI routes (CI adds `requireRole`), public routes unauthenticated
 - RBAC: `requireRole()` middleware checks `admin_users.roles[]` array
 - Logging: console.log/console.error (no logging library)
 - No test suite
