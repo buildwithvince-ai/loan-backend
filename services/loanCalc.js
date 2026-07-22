@@ -219,10 +219,68 @@ function validateCiRepaymentFields(input) {
   return { valid: errors.length === 0, errors };
 }
 
+// ---------------------------------------------------------------------------
+// toNumericOrNull
+// Coerce a client-supplied value bound for a numeric/integer DB column. An
+// empty string, whitespace-only string, null/undefined, or any non-numeric
+// string all become NULL — so Postgres never receives "" for a numeric column
+// (which throws `invalid input syntax for type numeric: ""` → HTTP 500).
+// Numbers and numeric strings pass through as Numbers.
+// ---------------------------------------------------------------------------
+function toNumericOrNull(v) {
+  if (v == null) return null;
+  if (typeof v === 'string' && v.trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ---------------------------------------------------------------------------
+// toIntArrayOrNull
+// Coerce a client-supplied array bound for an integer[] column (e.g.
+// salary_payout_dates). Non-arrays, empty arrays, and arrays that reduce to no
+// finite integers become NULL. Any "" / non-numeric entries are dropped so
+// Postgres never receives "" for an integer[] element.
+// ---------------------------------------------------------------------------
+function toIntArrayOrNull(v) {
+  if (!Array.isArray(v)) return null;
+  const nums = v.map(toNumericOrNull).filter((n) => n != null);
+  return nums.length ? nums : null;
+}
+
+// Numeric keys that may appear inside the ci_form_data jsonb blob. jsonb itself
+// tolerates "" (it stores as a JSON string, not a numeric cast), so these do
+// not trigger the 500 today — but coercing them keeps the stored blob clean and
+// safe for any consumer that later reads them as numbers. Non-numeric keys
+// (e.g. is_reapplication, free-text remarks) are intentionally left untouched.
+const CI_FORM_NUMERIC_KEYS = [
+  'recommended_amount', 'ci_recommended_amount',
+  'age', 'base_score', 'ci_total',
+  'q1_score', 'q2_score', 'q3_score', 'q4_score',
+  'renewal_bonus', 'renewal_deductions', 'total_deductions',
+];
+
+// ---------------------------------------------------------------------------
+// sanitizeCiFormNumerics
+// Return a shallow copy of ci_form_data with its known numeric keys coerced via
+// toNumericOrNull. Only keys present in the input are rewritten; everything
+// else is passed through unchanged.
+// ---------------------------------------------------------------------------
+function sanitizeCiFormNumerics(ciForm) {
+  if (!ciForm || typeof ciForm !== 'object') return ciForm;
+  const out = { ...ciForm };
+  for (const key of CI_FORM_NUMERIC_KEYS) {
+    if (key in out) out[key] = toNumericOrNull(out[key]);
+  }
+  return out;
+}
+
 module.exports = {
   calculateRepayments,
   calculateLoanFees,
   calculateTotalInterest,
   validateLoanInputs,
   validateCiRepaymentFields,
+  toNumericOrNull,
+  toIntArrayOrNull,
+  sanitizeCiFormNumerics,
 };

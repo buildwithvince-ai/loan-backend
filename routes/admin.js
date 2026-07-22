@@ -2,7 +2,7 @@ const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
-const { validateCiRepaymentFields } = require('../services/loanCalc')
+const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics } = require('../services/loanCalc')
 
 // Per-user Supabase JWT only. The previous x-admin-secret bypass minted a
 // synthetic super_admin from a shared secret that ships in the frontend
@@ -235,7 +235,7 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
     const {
       ci_score, notes, reviewed_by,
       ci_form_data, interviewer, ci_recommendation,
-      ci_remarks, ci_recommended_amount,
+      ci_remarks, ci_recommended_amount, recommended_amount,
       payment_frequency, salary_payout_dates, repayment_cycle, honorarium_date
     } = req.body
 
@@ -262,6 +262,25 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
       return res.status(400).json({ error: 'ci_score must be a number between 0 and 50' })
     }
 
+    // Coerce every client-supplied numeric-bound field so "" (or any non-numeric
+    // string) becomes NULL instead of hitting a numeric/integer column and
+    // throwing a 500. The recommended amount arrives under any of three keys
+    // (top-level ci_recommended_amount / recommended_amount, or nested in
+    // ci_form_data) — take the first that resolves to a real number.
+    const recommendedAmount =
+      toNumericOrNull(ci_recommended_amount) ??
+      toNumericOrNull(recommended_amount) ??
+      toNumericOrNull(ci_form_data?.recommended_amount)
+    const honorariumDate = toNumericOrNull(honorarium_date)
+    const salaryPayoutDates = toIntArrayOrNull(salary_payout_dates)
+    const ciFormData = sanitizeCiFormNumerics(ci_form_data)
+
+    // An "approved" recommendation must carry a valid amount — reject with 400
+    // rather than letting a missing/blank value fail deeper as a 500.
+    if (ci_recommendation === 'approved' && recommendedAmount == null) {
+      return res.status(400).json({ error: 'recommended_amount is required and must be a number when ci_recommendation is "approved"' })
+    }
+
     // Normalize CI from 0-50 scale to 0-100
     const ci_normalized = Math.round((ci_score_num / 50) * 100)
     const finNorm = app.finscore_normalized || 0
@@ -286,15 +305,15 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
         tier,
         notes,
         reviewed_by,
-        ci_form_data,
+        ci_form_data: ciFormData,
         interviewer,
         ci_recommendation,
         ci_remarks,
-        ci_recommended_amount,
+        ci_recommended_amount: recommendedAmount,
         payment_frequency,
-        salary_payout_dates,
+        salary_payout_dates: salaryPayoutDates,
         repayment_cycle,
-        honorarium_date,
+        honorarium_date: honorariumDate,
         reviewed_at: new Date().toISOString()
       })
       .eq('id', req.params.id)
