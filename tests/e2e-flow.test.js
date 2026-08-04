@@ -441,6 +441,11 @@ async function run() {
     check('fast-path tagged renewal + linked', fastRow.application_category === 'renewal' && fastRow.linked_borrower_id === 'LD-700', JSON.stringify({ c: fastRow.application_category, l: fastRow.linked_borrower_id }));
     check('fast-path attributed FinScore', fastRow.finscore_attributed === true && fastRow.finscore_raw === 555 && fastRow.finscore_normalized === 85, JSON.stringify({ a: fastRow.finscore_attributed, r: fastRow.finscore_raw, n: fastRow.finscore_normalized }));
     check('fast-path recorded source + prior composite', fastRow.renewal_source_application_id != null && fastRow.attributed_final_score === 88, JSON.stringify({ s: fastRow.renewal_source_application_id, f: fastRow.attributed_final_score }));
+    // Provenance: the copied finscore_raw is identical to a fresh score, so the
+    // approver screen needs the source date + human reference to put the age on
+    // the number itself. A UUID pointer alone is unrenderable.
+    check('fast-path carries source date + reference', fastRow.renewal_source_reference_id === 'GR8-APPROVED1' && !Number.isNaN(Date.parse(fastRow.renewal_source_submitted_at)), JSON.stringify({ d: fastRow.renewal_source_submitted_at, r: fastRow.renewal_source_reference_id }));
+    check('source date matches the row the score came from', fastRow.renewal_source_submitted_at === db.applications.find((a) => a.id === fastRow.renewal_source_application_id).submitted_at, fastRow.renewal_source_submitted_at);
 
     // Stale approval (200d) → renewal linkage kept, FinScore re-run.
     db.applications.push({
@@ -454,6 +459,10 @@ async function run() {
     const staleRow = db.applications.find((a) => a.phone === '09177777777' && a.status === 'pending');
     check('stale renewal still links borrower', staleRow.application_category === 'renewal' && staleRow.linked_borrower_id === 'LD-800', JSON.stringify({ c: staleRow.application_category, l: staleRow.linked_borrower_id }));
     check('stale renewal re-ran FinScore', staleRow.finscore_attributed === false && staleRow.finscore_raw === 510, JSON.stringify({ a: staleRow.finscore_attributed, r: staleRow.finscore_raw }));
+    // A re-run renewal measured its own score, so it must carry NO provenance —
+    // otherwise the approver screen labels a fresh score as carried over, which
+    // is the same misread in the opposite direction.
+    check('re-run renewal carries no provenance', staleRow.renewal_source_submitted_at == null && staleRow.renewal_source_reference_id == null, JSON.stringify({ d: staleRow.renewal_source_submitted_at, r: staleRow.renewal_source_reference_id }));
 
     // Decline AFTER the approval → no fast-path, prior_decline_flag raised.
     db.applications.push({
