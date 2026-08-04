@@ -2,7 +2,7 @@ const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
-const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics } = require('../services/loanCalc')
+const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics, computeCompositeScore } = require('../services/loanCalc')
 
 // Per-user Supabase JWT only. The previous x-admin-secret bypass minted a
 // synthetic super_admin from a shared secret that ships in the frontend
@@ -31,7 +31,8 @@ const LIST_FIELDS = [
   'so_decision', 'so_decision_at', 'returned_count', 'last_return_reason',
   'loandisk_borrower_id', 'loandisk_loan_id', 'approver_proposed_amount',
   'approver_proposed_term', 'ci_recommendation', 'ci_recommended_amount',
-  'interviewer', 'submitted_at', 'reviewed_at'
+  'interviewer', 'submitted_at', 'reviewed_at',
+  'renewal_source_application_id', 'finscore_attributed', 'attributed_final_score'
 ].join(', ')
 
 // List all applications.
@@ -229,6 +230,43 @@ router.get('/applications/phone/:phone', requireRole(...READ_ROLES), async (req,
   }
 })
 
+// Every application belonging to one client, for the dashboard's renewal
+// history view. This system has no clients table — the client identity IS the
+// Loandisk borrower id, so it matches both directions of the link: rows the
+// borrower owns outright (loandisk_borrower_id, set on approval) and renewals
+// pointing back at them (linked_borrower_id, set on submit).
+//
+// Two segments after /applications, so it cannot be captured by
+// /applications/:id. Returns LIST_FIELDS, not select('*') — same reasoning as
+// the list route: the jsonb columns are large and the history view shows cards.
+router.get('/applications/borrower/:borrowerId', requireRole(...READ_ROLES), async (req, res) => {
+  try {
+    const borrowerId = String(req.params.borrowerId || '').trim()
+    if (!borrowerId) {
+      return res.status(400).json({ error: 'borrowerId is required' })
+    }
+
+    // Strip PostgREST or() metacharacters before interpolating — same guard as
+    // routes/borrowers.js. An unescaped comma or paren rewrites the filter.
+    const safeId = borrowerId.replace(/[,()*]/g, '')
+    if (!safeId) {
+      return res.status(400).json({ error: 'borrowerId is required' })
+    }
+
+    const { data, error } = await supabase
+      .from('applications')
+      .select(LIST_FIELDS)
+      .or(`loandisk_borrower_id.eq.${safeId},linked_borrower_id.eq.${safeId}`)
+      .order('submitted_at', { ascending: false })
+
+    if (error) throw error
+    return res.json(data)
+  } catch (error) {
+    console.error('Admin borrower history error:', error.message)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 // Submit CI score and calculate final score + tier
 router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', 'ci_officer', 'approver'), async (req, res) => {
   try {
@@ -240,10 +278,11 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
     } = req.body
 
     // Fetch loan_type (authoritative) up front — needed to enforce the SBL-only
-    // honorarium_date requirement, alongside finscore_normalized for scoring.
+    // honorarium_date requirement, alongside finscore_normalized and
+    // application_category (renewals skip the bonus) for scoring.
     const { data: app, error: fetchError } = await supabase
       .from('applications')
-      .select('finscore_normalized, loan_type')
+      .select('finscore_normalized, loan_type, application_category')
       .eq('id', req.params.id)
       .single()
 
@@ -281,20 +320,16 @@ router.patch('/applications/:id/ci-score', requireRole('admin', 'super_admin', '
       return res.status(400).json({ error: 'recommended_amount is required and must be a number when ci_recommendation is "approved"' })
     }
 
-    // Normalize CI from 0-50 scale to 0-100
-    const ci_normalized = Math.round((ci_score_num / 50) * 100)
-    const finNorm = app.finscore_normalized || 0
+    // Composite score + tier. Shared with routes/ci.js — the two routes used to
+    // carry identical copies of this block. Renewals suppress the +10 bonus
+    // because they already inherit the prior FinScore (services/renewal.js).
     const isReapplication = ci_form_data?.is_reapplication === true || ci_form_data?.is_reapplication === 'true'
-    const reapplication_bonus = isReapplication ? 10 : 0
-    const raw_score = Math.round(
-      ((finNorm * 0.50) + (ci_normalized * 0.50)) * 10
-    ) / 10
-    const final_score = Math.min(raw_score + reapplication_bonus, 100)
-
-    let tier
-    if (final_score >= 85) tier = 'approved'
-    else if (final_score >= 70) tier = 'tier_b'
-    else tier = 'declined'
+    const { ciNormalized: ci_normalized, finalScore: final_score, tier } = computeCompositeScore({
+      finscoreNormalized: app.finscore_normalized,
+      ciScore: ci_score_num,
+      isReapplication,
+      isRenewal: app.application_category === 'renewal'
+    })
 
     const { data, error } = await supabase
       .from('applications')

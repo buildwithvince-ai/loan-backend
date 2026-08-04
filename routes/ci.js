@@ -2,9 +2,14 @@ const express = require('express')
 const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
-const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics } = require('../services/loanCalc')
+const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics, computeCompositeScore } = require('../services/loanCalc')
 
-const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage'
+// prior_decline_flag / application_category / finscore_attributed are here so a
+// CI officer can see WHY an applicant is back: a returning applicant with a
+// prior decline needs different questions than a clean renewal, and an
+// attributed score means the FinScore on screen was inherited, not measured
+// today. The flag was written on /submit since 2026-06 but was invisible to CI.
+const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage, application_category, linked_borrower_id, prior_decline_flag, prior_decline_reference, finscore_attributed, attributed_final_score'
 
 router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin', 'approver'))
 
@@ -54,10 +59,11 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
     } = req.body
 
     // Fetch loan_type (authoritative) up front — needed to enforce the SBL-only
-    // honorarium_date requirement, alongside finscore_normalized for scoring.
+    // honorarium_date requirement, alongside finscore_normalized and
+    // application_category (renewals skip the bonus) for scoring.
     const { data: app, error: fetchError } = await supabase
       .from('applications')
-      .select('finscore_normalized, loan_type')
+      .select('finscore_normalized, loan_type, application_category')
       .eq('id', req.params.id)
       .single()
 
@@ -94,19 +100,14 @@ router.patch('/applications/:id/ci-score', async (req, res) => {
       return res.status(400).json({ error: 'recommended_amount is required and must be a number when ci_recommendation is "approved"' })
     }
 
-    const ci_normalized = Math.round((ci_score_num / 50) * 100)
-    const finNorm = app.finscore_normalized || 0
+    // Composite score + tier — shared with routes/admin.js. See loanCalc.
     const isReapplication = ci_form_data?.is_reapplication === true || ci_form_data?.is_reapplication === 'true'
-    const reapplication_bonus = isReapplication ? 10 : 0
-    const raw_score = Math.round(
-      ((finNorm * 0.50) + (ci_normalized * 0.50)) * 10
-    ) / 10
-    const final_score = Math.min(raw_score + reapplication_bonus, 100)
-
-    let tier
-    if (final_score >= 85) tier = 'approved'
-    else if (final_score >= 70) tier = 'tier_b'
-    else tier = 'declined'
+    const { ciNormalized: ci_normalized, finalScore: final_score, tier } = computeCompositeScore({
+      finscoreNormalized: app.finscore_normalized,
+      ciScore: ci_score_num,
+      isReapplication,
+      isRenewal: app.application_category === 'renewal'
+    })
 
     const { error: updateError } = await supabase
       .from('applications')

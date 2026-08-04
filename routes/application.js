@@ -28,6 +28,7 @@ function handleUpload(req, res, next) {
   })
 }
 const { createBorrower, uploadAllFiles } = require('../services/loandisk')
+const { evaluateRenewal } = require('../services/renewal')
 const { supabase } = require('../services/supabase')
 const { compressFiles, detectMimeFromMagic } = require('../services/compress')
 const { notifySalesOfficer, notifyTeamByRole } = require('../services/email')
@@ -229,10 +230,11 @@ router.post('/submit', handleUpload, async (req, res) => {
     const formData = req.body
     const files = req.files || []
 
-    // Three independent pre-check reads batched in one round trip (perf review
-    // finding 5): SO validation, pending-duplicate check, prior-decline lookup.
-    // Same results and error handling as the previous serial version.
-    const [soCheckRes, existingRes, priorDeclinedRes] = await Promise.all([
+    // Four independent pre-check reads batched in one round trip (perf review
+    // finding 5): SO validation, pending-duplicate check, prior-decline lookup,
+    // prior-approval lookup. Same results and error handling as the previous
+    // serial version.
+    const [soCheckRes, existingRes, priorDeclinedRes, priorApprovedRes] = await Promise.all([
       formData.sales_officer_id
         ? supabase
             .from('admin_users')
@@ -248,11 +250,24 @@ router.post('/submit', handleUpload, async (req, res) => {
         .eq('phone', formData.mobile)
         .eq('status', 'pending')
         .maybeSingle(),
+      // submitted_at is needed beyond the flag itself: a decline that postdates
+      // the approval blocks the renewal fast-path (see services/renewal.js).
       supabase
         .from('applications')
-        .select('reference_id')
+        .select('reference_id, submitted_at')
         .eq('phone', formData.mobile)
         .eq('status', 'declined')
+        .order('submitted_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      // Renewal source: most recent approved application for this phone that
+      // reached Loandisk. Backed by idx_applications_phone_approved (017).
+      supabase
+        .from('applications')
+        .select('id, loandisk_borrower_id, finscore_raw, finscore_normalized, final_score, submitted_at')
+        .eq('phone', formData.mobile)
+        .eq('status', 'approved')
+        .not('loandisk_borrower_id', 'is', null)
         .order('submitted_at', { ascending: false })
         .limit(1)
         .maybeSingle()
@@ -264,33 +279,31 @@ router.post('/submit', handleUpload, async (req, res) => {
       assigned_sales_officer = soCheckRes.data.id;
     }
 
-    // Renewal validation — accept application_category + linked_borrower_id
-    // at the top level of the form payload. `new` is the default; `renewal`
-    // requires a linked_borrower_id that exists on a previously-approved
-    // application (loandisk_borrower_id present).
-    const application_category = (formData.application_category === 'renewal') ? 'renewal' : 'new'
-    let linked_borrower_id = null
-    if (application_category === 'renewal') {
-      const provided = String(formData.linked_borrower_id || '').trim()
-      if (!provided) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'linked_borrower_id is required for renewal applications.'
-        })
-      }
-      const { data: linkCheck } = await supabase
-        .from('applications')
-        .select('id, loandisk_borrower_id')
-        .eq('loandisk_borrower_id', provided)
-        .limit(1)
-        .maybeSingle()
-      if (!linkCheck) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'linked_borrower_id does not match any approved borrower.'
-        })
-      }
-      linked_borrower_id = provided
+    // Renewal resolution — SERVER-DERIVED. `application_category` and
+    // `linked_borrower_id` still arrive in the payload (the frontend renewal
+    // picker sends them) but are a hint only; the phone lookup above decides.
+    //
+    // The previous version trusted both fields and validated linked_borrower_id
+    // only by checking the id existed on SOME application — not that it
+    // belonged to this applicant. Combined with the approval path
+    // (services/pipeline.js), which skips borrower creation AND KYC file upload
+    // for renewals, a submission carrying someone else's borrower id would
+    // attach a loan to that person's Loandisk record with no documents. Ids are
+    // enumerable through GET /api/borrowers/search. A submitted id that does
+    // not match this phone's own approval is now discarded, not honoured.
+    const renewal = evaluateRenewal(priorApprovedRes.data, priorDeclinedRes.data, Date.now())
+
+    const claimedLink = String(formData.linked_borrower_id || '').trim()
+    if (claimedLink && claimedLink !== renewal.linkedBorrowerId) {
+      // Reference id isn't minted yet, and the phone is PII — log neither.
+      console.warn('[submit] discarded linked_borrower_id not owned by this applicant')
+    }
+
+    const application_category = renewal.isRenewal ? 'renewal' : 'new'
+    const linked_borrower_id = renewal.linkedBorrowerId
+
+    if (renewal.isRenewal && !renewal.canSkipFinScore) {
+      console.log('[submit] renewal detected, FinScore still required:', renewal.ineligibleReason)
     }
 
     // Step 1 — Check for existing pending application with same phone
@@ -315,21 +328,33 @@ router.post('/submit', handleUpload, async (req, res) => {
       return res.status(200).json({ status: 'declined', reasons })
     }
 
-    // Step 3 — FinScore
-    const { getScore } = require('../services/finscore')
-    const finScore = await getScore(formData.mobile)
-    console.log('FinScore result:', JSON.stringify(finScore))
+    // Step 3/4 — FinScore, or attribution on the renewal fast-path.
+    //
+    // Fast-path skips the FinScore call entirely and inherits the source row's
+    // score components. The phone-verification side effect of getScore is not
+    // lost by skipping: the source application only reached 'approved' because
+    // FinScore verified that same phone within the recency window.
+    let finscore_raw
+    let finscore_normalized
+    if (renewal.canSkipFinScore) {
+      finscore_raw = renewal.attributedFinscoreRaw
+      finscore_normalized = renewal.attributedFinscoreNormalized
+      console.log('[submit] renewal fast-path — FinScore skipped, score attributed from', renewal.sourceApplicationId)
+    } else {
+      const { getScore } = require('../services/finscore')
+      const finScore = await getScore(formData.mobile)
+      console.log('FinScore result:', JSON.stringify(finScore))
 
-    if (finScore.phoneNotFound) {
-      return res.status(422).json({
-        status: 'phone_not_found',
-        message: 'The mobile number provided could not be verified. Please check and try again.'
-      })
+      if (finScore.phoneNotFound) {
+        return res.status(422).json({
+          status: 'phone_not_found',
+          message: 'The mobile number provided could not be verified. Please check and try again.'
+        })
+      }
+
+      finscore_raw = finScore.score || 0
+      finscore_normalized = finScore.normalized || 0
     }
-
-    // Step 4 — Normalize FinScore (range-aware via service)
-    const finscore_raw = finScore.score || 0
-    const finscore_normalized = finScore.normalized || 0
 
     // Step 5 — Persist immediately, defer file processing off the request path
     // (C). FinScore has already validated the phone, so the record can be saved
@@ -368,6 +393,9 @@ router.post('/submit', handleUpload, async (req, res) => {
         prior_decline_reference,
         application_category,
         linked_borrower_id,
+        renewal_source_application_id: renewal.sourceApplicationId,
+        finscore_attributed: renewal.canSkipFinScore,
+        attributed_final_score: renewal.attributedFinalScore,
         documents_incomplete: true
       })
       .select('id')

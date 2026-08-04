@@ -274,6 +274,44 @@ function sanitizeCiFormNumerics(ciForm) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// computeCompositeScore
+// Final applicant score: 50% normalized FinScore + 50% normalized CI score,
+// plus the flat returning-applicant bonus, capped at 100. Tier thresholds:
+// >=85 approved, >=70 tier_b, else declined.
+//
+// Extracted 2026-08-04 from routes/admin.js and routes/ci.js, which held
+// byte-identical copies of this block. Renewal handling had to change in both,
+// so they now share one implementation instead of drifting apart.
+//
+// Renewals do NOT take the +10 bonus: they already inherit the prior FinScore
+// (services/renewal.js), and stacking both would lift a prior 85 to 95 on no
+// new evidence. Attribution replaces the bonus — confirmed with the operator
+// 2026-08-04.
+//
+// @param {object} args
+// @param {number} args.finscoreNormalized Prior or fresh FinScore, 0-100 scale.
+// @param {number} args.ciScore Raw CI interview score, 0-50 scale.
+// @param {boolean} args.isReapplication CI-officer-entered returning flag.
+// @param {boolean} args.isRenewal Server-derived renewal status; suppresses the bonus.
+// @returns {{ciNormalized: number, finalScore: number, tier: string}}
+// ---------------------------------------------------------------------------
+function computeCompositeScore({ finscoreNormalized, ciScore, isReapplication, isRenewal }) {
+  const ciNormalized = Math.round((Number(ciScore) / 50) * 100);
+  const finNorm = Number(finscoreNormalized) || 0;
+  const bonus = (!isRenewal && isReapplication) ? 10 : 0;
+
+  const rawScore = Math.round(((finNorm * 0.50) + (ciNormalized * 0.50)) * 10) / 10;
+  const finalScore = Math.min(rawScore + bonus, 100);
+
+  let tier;
+  if (finalScore >= 85) tier = 'approved';
+  else if (finalScore >= 70) tier = 'tier_b';
+  else tier = 'declined';
+
+  return { ciNormalized, finalScore, tier };
+}
+
 module.exports = {
   calculateRepayments,
   calculateLoanFees,
@@ -283,4 +321,5 @@ module.exports = {
   toNumericOrNull,
   toIntArrayOrNull,
   sanitizeCiFormNumerics,
+  computeCompositeScore,
 };
