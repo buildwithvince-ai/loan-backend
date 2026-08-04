@@ -88,8 +88,16 @@ app.use((req, res, next) => {
   next()
 })
 
+// Railway injects RAILWAY_GIT_COMMIT_SHA at build time. Exposing it makes a
+// deploy verifiable in one unauthenticated curl — the Railway dashboard reports
+// a deployment UUID, which does not identify the source commit, and every route
+// that would otherwise fingerprint a build sits behind auth.
 app.get('/', (req, res) => {
-  res.json({ status: 'alive' })
+  const commit = process.env.RAILWAY_GIT_COMMIT_SHA || null
+  res.json({
+    status: 'alive',
+    commit: commit ? commit.slice(0, 7) : null
+  })
 })
 
 const applicationRouter = require('./routes/application')

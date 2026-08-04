@@ -34,3 +34,10 @@ alter table applications add column if not exists attributed_final_score numeric
 create index if not exists idx_applications_phone_approved
   on applications (phone, submitted_at desc)
   where status = 'approved';
+
+-- Refresh the PostgREST schema cache. Without this the columns exist in
+-- Postgres but supabase-js still rejects them ("Could not find the column in
+-- the schema cache"), which is how the 2026-06-03 incident reached production.
+-- Supabase reloads automatically on DDL in most cases; this makes a replay on
+-- any other environment safe rather than dependent on that.
+notify pgrst, 'reload schema';
