@@ -3,6 +3,7 @@ const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
 const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics, computeCompositeScore } = require('../services/loanCalc')
+const { fetchBorrowerHistory } = require('../services/applications')
 
 // Per-user Supabase JWT only. The previous x-admin-secret bypass minted a
 // synthetic super_admin from a shared secret that ships in the frontend
@@ -241,25 +242,10 @@ router.get('/applications/phone/:phone', requireRole(...READ_ROLES), async (req,
 // the list route: the jsonb columns are large and the history view shows cards.
 router.get('/applications/borrower/:borrowerId', requireRole(...READ_ROLES), async (req, res) => {
   try {
-    const borrowerId = String(req.params.borrowerId || '').trim()
-    if (!borrowerId) {
+    const data = await fetchBorrowerHistory(req.params.borrowerId, LIST_FIELDS)
+    if (data === null) {
       return res.status(400).json({ error: 'borrowerId is required' })
     }
-
-    // Strip PostgREST or() metacharacters before interpolating — same guard as
-    // routes/borrowers.js. An unescaped comma or paren rewrites the filter.
-    const safeId = borrowerId.replace(/[,()*]/g, '')
-    if (!safeId) {
-      return res.status(400).json({ error: 'borrowerId is required' })
-    }
-
-    const { data, error } = await supabase
-      .from('applications')
-      .select(LIST_FIELDS)
-      .or(`loandisk_borrower_id.eq.${safeId},linked_borrower_id.eq.${safeId}`)
-      .order('submitted_at', { ascending: false })
-
-    if (error) throw error
     return res.json(data)
   } catch (error) {
     console.error('Admin borrower history error:', error.message)

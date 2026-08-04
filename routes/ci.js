@@ -3,13 +3,18 @@ const router = express.Router()
 const { supabase } = require('../services/supabase')
 const { verifyToken, requireRole } = require('../middleware/auth')
 const { validateCiRepaymentFields, toNumericOrNull, toIntArrayOrNull, sanitizeCiFormNumerics, computeCompositeScore } = require('../services/loanCalc')
+const { fetchBorrowerHistory } = require('../services/applications')
 
 // prior_decline_flag / application_category / finscore_attributed are here so a
 // CI officer can see WHY an applicant is back: a returning applicant with a
 // prior decline needs different questions than a clean renewal, and an
 // attributed score means the FinScore on screen was inherited, not measured
 // today. The flag was written on /submit since 2026-06 but was invisible to CI.
-const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage, application_category, linked_borrower_id, prior_decline_flag, prior_decline_reference, finscore_attributed, attributed_final_score'
+// status / loandisk_borrower_id are here for the client-history route below: a
+// past application with no outcome tells a CI officer nothing, and the history
+// is keyed on the borrower id it returns. Both are null on the pending rows the
+// list routes serve, so neither widens what CI sees during an interview.
+const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage, status, application_category, linked_borrower_id, loandisk_borrower_id, prior_decline_flag, prior_decline_reference, finscore_attributed, attributed_final_score'
 
 router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin', 'approver'))
 
@@ -44,6 +49,25 @@ router.get('/applications/phone/:phone', async (req, res) => {
     return res.json(data)
   } catch (error) {
     console.error('CI phone lookup error:', error.message)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// Every application for one client, newest first. Mirrors the admin route at
+// routes/admin.js but projects CI_FIELDS instead of LIST_FIELDS — a CI officer
+// needs a returning applicant's history to frame the interview, not the
+// approver's scoring and disbursement columns. Query logic is shared via
+// services/applications so the two panels cannot disagree on what counts as
+// this client's history.
+router.get('/applications/borrower/:borrowerId', async (req, res) => {
+  try {
+    const data = await fetchBorrowerHistory(req.params.borrowerId, CI_FIELDS)
+    if (data === null) {
+      return res.status(400).json({ error: 'borrowerId is required' })
+    }
+    return res.json(data)
+  } catch (error) {
+    console.error('CI borrower history error:', error.message)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
