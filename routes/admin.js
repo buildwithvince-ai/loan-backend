@@ -33,7 +33,11 @@ const LIST_FIELDS = [
   'loandisk_borrower_id', 'loandisk_loan_id', 'approver_proposed_amount',
   'approver_proposed_term', 'ci_recommendation', 'ci_recommended_amount',
   'interviewer', 'submitted_at', 'reviewed_at',
-  'renewal_source_application_id', 'finscore_attributed', 'attributed_final_score'
+  'renewal_source_application_id', 'finscore_attributed', 'attributed_final_score',
+  // Provenance for an attributed score. The copied finscore_raw is identical to
+  // a freshly measured one, so the approver screen renders the age on the
+  // number itself rather than relying on a separate notice.
+  'renewal_source_submitted_at', 'renewal_source_reference_id'
 ].join(', ')
 
 // List all applications.

@@ -264,7 +264,7 @@ router.post('/submit', handleUpload, async (req, res) => {
       // reached Loandisk. Backed by idx_applications_phone_approved (017).
       supabase
         .from('applications')
-        .select('id, loandisk_borrower_id, finscore_raw, finscore_normalized, final_score, submitted_at')
+        .select('id, reference_id, loandisk_borrower_id, finscore_raw, finscore_normalized, final_score, submitted_at')
         .eq('phone', formData.mobile)
         .eq('status', 'approved')
         .not('loandisk_borrower_id', 'is', null)
@@ -396,6 +396,8 @@ router.post('/submit', handleUpload, async (req, res) => {
         renewal_source_application_id: renewal.sourceApplicationId,
         finscore_attributed: renewal.canSkipFinScore,
         attributed_final_score: renewal.attributedFinalScore,
+        renewal_source_submitted_at: renewal.sourceSubmittedAt,
+        renewal_source_reference_id: renewal.sourceReferenceId,
         documents_incomplete: true
       })
       .select('id')

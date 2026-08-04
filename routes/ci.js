@@ -14,7 +14,7 @@ const { fetchBorrowerHistory } = require('../services/applications')
 // past application with no outcome tells a CI officer nothing, and the history
 // is keyed on the borrower id it returns. Both are null on the pending rows the
 // list routes serve, so neither widens what CI sees during an interview.
-const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage, status, application_category, linked_borrower_id, loandisk_borrower_id, prior_decline_flag, prior_decline_reference, finscore_attributed, attributed_final_score'
+const CI_FIELDS = 'id, reference_id, phone, full_name, loan_type, loan_amount, loan_term, submitted_at, ci_score, interviewer, stage, status, application_category, linked_borrower_id, loandisk_borrower_id, prior_decline_flag, prior_decline_reference, finscore_attributed, attributed_final_score, renewal_source_submitted_at, renewal_source_reference_id'
 
 router.use(verifyToken, requireRole('ci_officer', 'admin', 'super_admin', 'approver'))
 

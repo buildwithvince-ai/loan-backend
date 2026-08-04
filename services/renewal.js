@@ -48,6 +48,8 @@ const NO_RENEWAL = Object.freeze({
   attributedFinscoreRaw: null,
   attributedFinscoreNormalized: null,
   attributedFinalScore: null,
+  sourceSubmittedAt: null,
+  sourceReferenceId: null,
   ineligibleReason: null,
 });
 
@@ -57,13 +59,14 @@ const NO_RENEWAL = Object.freeze({
  * @param {object|null} priorApproved Most recent application for this phone with
  *   status='approved' and a non-null loandisk_borrower_id. Needs the columns
  *   id, loandisk_borrower_id, finscore_raw, finscore_normalized, final_score,
- *   submitted_at.
+ *   submitted_at, reference_id.
  * @param {object|null} latestDecline Most recent application for this phone with
  *   status='declined'. Needs submitted_at. Pass null when there is none.
  * @param {number} nowMs Current time in epoch ms.
  * @returns {{isRenewal: boolean, canSkipFinScore: boolean, linkedBorrowerId: string|null,
  *   sourceApplicationId: string|null, attributedFinscoreRaw: number|null,
  *   attributedFinscoreNormalized: number|null, attributedFinalScore: number|null,
+ *   sourceSubmittedAt: string|null, sourceReferenceId: string|null,
  *   ineligibleReason: string|null}}
  */
 function evaluateRenewal(priorApproved, latestDecline, nowMs) {
@@ -110,12 +113,19 @@ function evaluateRenewal(priorApproved, latestDecline, nowMs) {
 
   const priorFinal = Number(priorApproved.final_score);
 
+  // Provenance travels with the attributed score. The copied finscore_raw /
+  // finscore_normalized are byte-identical to a freshly measured score, so
+  // without these the approver sees a possibly-89-day-old number with nothing
+  // on the number itself saying so. Set only on the fast-path — a renewal that
+  // re-ran FinScore measured its own score and has no provenance to carry.
   return {
     ...linked,
     canSkipFinScore: true,
     attributedFinscoreRaw: raw,
     attributedFinscoreNormalized: normalized,
     attributedFinalScore: Number.isFinite(priorFinal) ? priorFinal : null,
+    sourceSubmittedAt: priorApproved.submitted_at,
+    sourceReferenceId: priorApproved.reference_id || null,
   };
 }
 
