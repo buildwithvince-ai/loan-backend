@@ -170,8 +170,11 @@ async function executeLoandiskApproval(application, user, meta = {}) {
     }
 
     // Renewal reuse: use linked Loandisk borrower id when present and skip
-    // the createBorrower call. Falls back to creating a new borrower for
-    // `new` applications (or renewals missing a link, though /submit blocks that).
+    // the createBorrower call. Falls back to creating a new borrower for `new`
+    // applications. Renewal detection derives linked_borrower_id from the
+    // applicant's own prior approval (services/renewal.js), so a row marked
+    // renewal always carries one; the && guard is belt-and-braces for rows
+    // written before detection moved server-side.
     let borrowerId;
     const isRenewal = fullApp.application_category === 'renewal' && fullApp.linked_borrower_id;
     if (isRenewal) {
@@ -197,36 +200,40 @@ async function executeLoandiskApproval(application, user, meta = {}) {
       }
     }
 
-    // Files: only upload for fresh borrowers. Renewals already have docs in Loandisk.
+    // Files upload on every approval, renewals included. Renewals previously
+    // skipped this on the assumption their docs were already in Loandisk, but a
+    // renewal submits fresh payslips and re-issued IDs like any other
+    // application — skipping meant the Loandisk record silently kept ageing
+    // documents. Ops confirmed 2026-08-04 that current docs must land on the
+    // borrower record every time.
+    //
     // Transfer runs download+upload per file, FILE_TRANSFER_CONCURRENCY at a
     // time — fully serial transfer on a 60-file group holds the approval HTTP
     // request through 120+ sequential external calls and times out the
     // dashboard client. Semantics match the old serial loop: a failed download
     // skips that file (logged), a failed Loandisk upload aborts the approval.
-    if (!isRenewal) {
-      const fileMetadata = fullApp.file_metadata || [];
-      const FILE_TRANSFER_CONCURRENCY = 4;
-      let uploadedCount = 0;
-      for (let i = 0; i < fileMetadata.length; i += FILE_TRANSFER_CONCURRENCY) {
-        const batch = fileMetadata.slice(i, i + FILE_TRANSFER_CONCURRENCY);
-        await Promise.all(batch.map(async (fileMeta) => {
-          const { data: fileData, error: downloadError } = await supabase.storage
-            .from('application-files')
-            .download(fileMeta.storage_path);
+    const fileMetadata = fullApp.file_metadata || [];
+    const FILE_TRANSFER_CONCURRENCY = 4;
+    let uploadedCount = 0;
+    for (let i = 0; i < fileMetadata.length; i += FILE_TRANSFER_CONCURRENCY) {
+      const batch = fileMetadata.slice(i, i + FILE_TRANSFER_CONCURRENCY);
+      await Promise.all(batch.map(async (fileMeta) => {
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from('application-files')
+          .download(fileMeta.storage_path);
 
-          if (downloadError) {
-            console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
-            return;
-          }
+        if (downloadError) {
+          console.error(`Failed to download ${fileMeta.original_name}:`, downloadError.message);
+          return;
+        }
 
-          const buffer = Buffer.from(await fileData.arrayBuffer());
-          await uploadFile(borrowerId, fileMeta.original_name, buffer);
-          uploadedCount++;
-        }));
-      }
-      if (uploadedCount > 0) {
-        console.log(`Uploaded ${uploadedCount} files to Loandisk for borrower ${borrowerId}`);
-      }
+        const buffer = Buffer.from(await fileData.arrayBuffer());
+        await uploadFile(borrowerId, fileMeta.original_name, buffer);
+        uploadedCount++;
+      }));
+    }
+    if (uploadedCount > 0) {
+      console.log(`Uploaded ${uploadedCount} files to Loandisk for borrower ${borrowerId}`);
     }
 
     let loanResult;

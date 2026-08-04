@@ -960,6 +960,76 @@ async function run() {
   }
 
   // -----------------------------------------------------------------------
+  section('CI — client history by borrower id');
+  // -----------------------------------------------------------------------
+  {
+    const ciHist = await jsonReq('GET', '/api/ci/applications/borrower/LD-700', null, authH('ci_officer'));
+    check('CI borrower history → 200', ciHist.status === 200, String(ciHist.status));
+    check('CI history matches admin history size', (ciHist.body || []).length === 2, JSON.stringify((ciHist.body || []).map((r) => r.reference_id)));
+    // status is what makes a history useful to an interviewer — assert it survives
+    // the narrower CI projection.
+    check('CI history carries outcome status', (ciHist.body || []).every((r) => typeof r.status === 'string'), JSON.stringify((ciHist.body || []).map((r) => r.status)));
+    // The approver-only scoring columns must NOT leak through CI_FIELDS. This
+    // cannot be asserted from the response: the mock's select() is a no-op, so
+    // every row comes back whole regardless of projection. Assert the source
+    // constant instead — real PostgREST honours it, and a regression here is a
+    // one-word edit that no response-level check in this harness would catch.
+    const ciSrc = require('fs').readFileSync(require('path').join(__dirname, '../routes/ci.js'), 'utf8');
+    const ciFieldsLine = (ciSrc.match(/^const CI_FIELDS = '(.*)'$/m) || [])[1] || '';
+    check('CI_FIELDS excludes approver scoring columns', ciFieldsLine.length > 0 && !/\bfinal_score\b/.test(ciFieldsLine) && !/\btier\b/.test(ciFieldsLine), ciFieldsLine);
+    check('CI_FIELDS carries status for history', /\bstatus\b/.test(ciFieldsLine), ciFieldsLine);
+
+    const ciNoAuth = await jsonReq('GET', '/api/ci/applications/borrower/LD-700', null, {});
+    check('CI borrower history without auth → 401', ciNoAuth.status === 401, String(ciNoAuth.status));
+
+    const ciWrongRole = await jsonReq('GET', '/api/ci/applications/borrower/LD-700', null, authH('sales_officer'));
+    check('CI borrower history with sales_officer → 403', ciWrongRole.status === 403, String(ciWrongRole.status));
+  }
+
+  // -----------------------------------------------------------------------
+  section('APPROVAL — renewals push KYC files to Loandisk');
+  // -----------------------------------------------------------------------
+  {
+    // Renewals used to skip the Loandisk file transfer on the assumption their
+    // documents were already on the borrower record. Ops reversed that: a
+    // renewal submits fresh payslips and re-issued IDs, so they must upload.
+    db.applications.push({
+      id: newId(), reference_id: 'GR8-APPROVED9', phone: '09195555551', status: 'approved',
+      loandisk_borrower_id: 'LD-900', finscore_raw: 555, finscore_normalized: 85,
+      final_score: 88, submitted_at: new Date(Date.now() - 30 * 86400000).toISOString(),
+    });
+    delete FINSCORE['09195555551']; // fast-path must not call FinScore
+    await postForm('/api/application/submit', validForm({ mobile: '09195555551', loanAmount: '25000', paymentTerm: '12' }));
+    const renRow = db.applications.find((a) => a.phone === '09195555551' && a.status === 'pending');
+    check('renewal detected before approval', renRow.application_category === 'renewal' && renRow.linked_borrower_id === 'LD-900', JSON.stringify({ c: renRow.application_category, l: renRow.linked_borrower_id }));
+
+    // postForm sends no multipart files, so seed both the metadata the transfer
+    // reads and the stored bytes it downloads.
+    renRow.file_metadata = [
+      { original_name: 'payslip.jpg', storage_path: 'renewal/payslip.jpg' },
+      { original_name: 'valid-id.jpg', storage_path: 'renewal/valid-id.jpg' },
+    ];
+    storageFiles['renewal/payslip.jpg'] = Buffer.from('payslip-bytes');
+    storageFiles['renewal/valid-id.jpg'] = Buffer.from('valid-id-bytes');
+
+    const borrowersBefore = loandiskCalls.createBorrower.length;
+    const uploadsBefore = loandiskCalls.uploadFile.length;
+
+    await transitionStage(renRow.id, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
+    await jsonReq('PATCH', `/api/admin/applications/${renRow.id}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
+    const renAp = await jsonReq('PATCH', `/api/admin/applications/${renRow.id}/approve`, { loan_release_date: RELEASE_DATE }, authH('approver'));
+    check('renewal approve → 200', renAp.status === 200, JSON.stringify(renAp.body));
+
+    // Reusing the borrower is what makes this the renewal path — without it the
+    // upload assertion below would pass for an ordinary new application.
+    check('renewal reused Loandisk borrower (no create)', loandiskCalls.createBorrower.length === borrowersBefore, String(loandiskCalls.createBorrower.length - borrowersBefore));
+
+    const newUploads = loandiskCalls.uploadFile.slice(uploadsBefore);
+    check('renewal uploaded both KYC files', newUploads.length === 2, JSON.stringify(newUploads));
+    check('uploads targeted the linked borrower LD-900', newUploads.length > 0 && newUploads.every((u) => u.borrowerId === 'LD-900'), JSON.stringify(newUploads.map((u) => u.borrowerId)));
+  }
+
+  // -----------------------------------------------------------------------
   // Summary
   // -----------------------------------------------------------------------
   console.log(`\n\x1b[1mRESULT:\x1b[0m ${pass} passed, ${fail} failed`);
