@@ -82,6 +82,24 @@ class Query {
     this._filters.push((r) => String(r[c] || '').startsWith(p));
     return this;
   }
+  // Only the `is` operator is used against not() in this codebase
+  // (.not('col', 'is', null) — the renewal source lookup on /submit).
+  not(c, op, v) {
+    if (op !== 'is') throw new Error(`mock not(): unsupported operator ${op}`);
+    this._filters.push((r) => (r[c] ?? null) !== (v ?? null));
+    return this;
+  }
+  // PostgREST or(): comma-separated `col.op.value` terms, OR-ed together.
+  // Supports eq only — the filters this codebase builds.
+  or(expr) {
+    const terms = String(expr).split(',').map((t) => {
+      const [col, op, ...rest] = t.split('.');
+      if (op !== 'eq') throw new Error(`mock or(): unsupported operator ${op}`);
+      return { col, value: rest.join('.') };
+    });
+    this._filters.push((r) => terms.some((t) => String(r[t.col] ?? '') === t.value));
+    return this;
+  }
   order(col, opts = {}) { this._order = { col, ascending: opts.ascending !== false }; return this; }
   limit(n) { this._limit = n; return this; }
 
@@ -392,21 +410,80 @@ async function run() {
   }
 
   // -----------------------------------------------------------------------
-  section('SUBMIT — renewal validation');
+  section('SUBMIT — renewal detection is server-derived, not frontend-declared');
   // -----------------------------------------------------------------------
   {
-    const noLink = await postForm('/api/application/submit', validForm({ mobile: '09175555555', application_category: 'renewal' }));
-    check('renewal without linked_borrower_id → 400', noLink.status === 400 && /linked_borrower_id is required/.test(noLink.body.message), JSON.stringify(noLink.body));
+    const DAY = 24 * 60 * 60 * 1000;
+    const ago = (days) => new Date(Date.now() - days * DAY).toISOString();
 
-    const badLink = await postForm('/api/application/submit', validForm({ mobile: '09175555555', application_category: 'renewal', linked_borrower_id: 'NOPE' }));
-    check('renewal with non-existent link → 400', badLink.status === 400 && /does not match/.test(badLink.body.message), JSON.stringify(badLink.body));
-
-    db.applications.push({ id: newId(), reference_id: 'GR8-APPROVED1', phone: '09179999999', status: 'approved', loandisk_borrower_id: 'LD-700' });
+    // Claiming renewal with no prior approval is NOT an error — it is simply
+    // not a renewal. The old contract 400'd here on the frontend's say-so.
     FINSCORE['09175555555'] = { score: 540, normalized: 80, noScore: false };
-    const okRenewal = await postForm('/api/application/submit', validForm({ mobile: '09175555555', application_category: 'renewal', linked_borrower_id: 'LD-700' }));
-    check('renewal with valid link → success', okRenewal.body.status === 'success', JSON.stringify(okRenewal.body));
-    const rnRow = db.applications.find((a) => a.phone === '09175555555' && a.status === 'pending');
-    check('renewal fields persisted', rnRow.application_category === 'renewal' && rnRow.linked_borrower_id === 'LD-700', JSON.stringify({ c: rnRow.application_category, l: rnRow.linked_borrower_id }));
+    const falseClaim = await postForm('/api/application/submit', validForm({
+      mobile: '09175555555', application_category: 'renewal', linked_borrower_id: 'LD-700',
+    }));
+    check('claimed renewal with no prior approval → success', falseClaim.body.status === 'success', JSON.stringify(falseClaim.body));
+    const fcRow = db.applications.find((a) => a.phone === '09175555555' && a.status === 'pending');
+    check('claimed renewal downgraded to new', fcRow.application_category === 'new' && fcRow.linked_borrower_id === null, JSON.stringify({ c: fcRow.application_category, l: fcRow.linked_borrower_id }));
+    check('unowned borrower id discarded (IDOR)', fcRow.linked_borrower_id !== 'LD-700', String(fcRow.linked_borrower_id));
+    check('no attribution without a source', fcRow.finscore_attributed === false && fcRow.finscore_raw === 540, JSON.stringify({ a: fcRow.finscore_attributed, r: fcRow.finscore_raw }));
+
+    // Fresh approval (30d) → renewal + FinScore skipped + score attributed.
+    db.applications.push({
+      id: newId(), reference_id: 'GR8-APPROVED1', phone: '09176666666', status: 'approved',
+      loandisk_borrower_id: 'LD-700', finscore_raw: 555, finscore_normalized: 85,
+      final_score: 88, submitted_at: ago(30),
+    });
+    delete FINSCORE['09176666666']; // absent → any real FinScore call would fail the run
+    const fast = await postForm('/api/application/submit', validForm({ mobile: '09176666666' }));
+    check('renewal fast-path → success without declaring renewal', fast.body.status === 'success', JSON.stringify(fast.body));
+    const fastRow = db.applications.find((a) => a.phone === '09176666666' && a.status === 'pending');
+    check('fast-path tagged renewal + linked', fastRow.application_category === 'renewal' && fastRow.linked_borrower_id === 'LD-700', JSON.stringify({ c: fastRow.application_category, l: fastRow.linked_borrower_id }));
+    check('fast-path attributed FinScore', fastRow.finscore_attributed === true && fastRow.finscore_raw === 555 && fastRow.finscore_normalized === 85, JSON.stringify({ a: fastRow.finscore_attributed, r: fastRow.finscore_raw, n: fastRow.finscore_normalized }));
+    check('fast-path recorded source + prior composite', fastRow.renewal_source_application_id != null && fastRow.attributed_final_score === 88, JSON.stringify({ s: fastRow.renewal_source_application_id, f: fastRow.attributed_final_score }));
+
+    // Stale approval (200d) → renewal linkage kept, FinScore re-run.
+    db.applications.push({
+      id: newId(), reference_id: 'GR8-APPROVED2', phone: '09177777777', status: 'approved',
+      loandisk_borrower_id: 'LD-800', finscore_raw: 555, finscore_normalized: 85,
+      final_score: 88, submitted_at: ago(200),
+    });
+    FINSCORE['09177777777'] = { score: 510, normalized: 70, noScore: false };
+    const stale = await postForm('/api/application/submit', validForm({ mobile: '09177777777' }));
+    check('stale renewal → success', stale.body.status === 'success', JSON.stringify(stale.body));
+    const staleRow = db.applications.find((a) => a.phone === '09177777777' && a.status === 'pending');
+    check('stale renewal still links borrower', staleRow.application_category === 'renewal' && staleRow.linked_borrower_id === 'LD-800', JSON.stringify({ c: staleRow.application_category, l: staleRow.linked_borrower_id }));
+    check('stale renewal re-ran FinScore', staleRow.finscore_attributed === false && staleRow.finscore_raw === 510, JSON.stringify({ a: staleRow.finscore_attributed, r: staleRow.finscore_raw }));
+
+    // Decline AFTER the approval → no fast-path, prior_decline_flag raised.
+    db.applications.push({
+      id: newId(), reference_id: 'GR8-APPROVED3', phone: '09178888888', status: 'approved',
+      loandisk_borrower_id: 'LD-900', finscore_raw: 555, finscore_normalized: 85,
+      final_score: 88, submitted_at: ago(60),
+    });
+    db.applications.push({
+      id: newId(), reference_id: 'GR8-LATEDECLINE', phone: '09178888888', status: 'declined',
+      submitted_at: ago(10),
+    });
+    FINSCORE['09178888888'] = { score: 480, normalized: 60, noScore: false };
+    const relapsed = await postForm('/api/application/submit', validForm({ mobile: '09178888888' }));
+    check('approval-then-decline → success', relapsed.body.status === 'success', JSON.stringify(relapsed.body));
+    const relRow = db.applications.find((a) => a.phone === '09178888888' && a.status === 'pending');
+    check('later decline blocks fast-path', relRow.finscore_attributed === false && relRow.finscore_raw === 480, JSON.stringify({ a: relRow.finscore_attributed, r: relRow.finscore_raw }));
+    check('later decline still flags CI', relRow.prior_decline_flag === true && relRow.prior_decline_reference === 'GR8-LATEDECLINE', JSON.stringify({ f: relRow.prior_decline_flag, r: relRow.prior_decline_reference }));
+
+    // Prior approval with no usable FinScore (manual override) → no attribution.
+    db.applications.push({
+      id: newId(), reference_id: 'GR8-OVERRIDE', phone: '09173222222', status: 'approved',
+      loandisk_borrower_id: 'LD-950', finscore_raw: 0, finscore_normalized: 0,
+      final_score: 75, submitted_at: ago(5),
+    });
+    FINSCORE['09173222222'] = { score: 530, normalized: 76, noScore: false };
+    const ovr = await postForm('/api/application/submit', validForm({ mobile: '09173222222' }));
+    check('manual-override source → success', ovr.body.status === 'success', JSON.stringify(ovr.body));
+    const ovrRow = db.applications.find((a) => a.phone === '09173222222' && a.status === 'pending');
+    check('unusable prior score → FinScore re-run', ovrRow.finscore_attributed === false && ovrRow.finscore_raw === 530, JSON.stringify({ a: ovrRow.finscore_attributed, r: ovrRow.finscore_raw }));
+    check('unusable prior score → borrower still linked', ovrRow.linked_borrower_id === 'LD-950', String(ovrRow.linked_borrower_id));
   }
 
   // -----------------------------------------------------------------------
@@ -592,6 +669,13 @@ async function run() {
     const cId = await freshAtCI('09190000005', 100);
     const cRes = await jsonReq('PATCH', `/api/admin/applications/${cId}/ci-score`, { ci_score: 50, ci_form_data: { is_reapplication: true }, ...REPAY }, adminSecretH);
     check('final_score capped at 100', cRes.body.final_score === 100, JSON.stringify(cRes.body.final_score));
+
+    // Attribution replaces the bonus: a renewal ticking is_reapplication gets
+    // 70, not 80 — it already inherited the prior FinScore at submit.
+    const nId = await freshAtCI('09190000008', 70);
+    db.applications.find((a) => a.id === nId).application_category = 'renewal';
+    const nRes = await jsonReq('PATCH', `/api/admin/applications/${nId}/ci-score`, { ci_score: 35, ci_form_data: { is_reapplication: true }, ...REPAY }, adminSecretH);
+    check('renewal suppresses reapplication bonus', nRes.body.final_score === 70, JSON.stringify(nRes.body.final_score));
 
     // Repayment field validation (CI stage): two_times requires exactly 2 distinct dates.
     const vId = await freshAtCI('09190000006', 40);
@@ -854,6 +938,25 @@ async function run() {
     check('CI-agent route stored repayment_cycle', ciRow.repayment_cycle === '15-30', String(ciRow.repayment_cycle));
     const ciBad = await jsonReq('PATCH', `/api/ci/applications/${ciId}/ci-score`, { ci_score: 40, payment_frequency: 'two_times', salary_payout_dates: [15, 15], repayment_cycle: '15-15' }, authH('approver'));
     check('CI-agent route rejects non-distinct dates → 400', ciBad.status === 400 && /distinct/.test(ciBad.body.error), JSON.stringify(ciBad.body));
+  }
+
+  // -----------------------------------------------------------------------
+  section('ADMIN — client history by borrower id');
+  // -----------------------------------------------------------------------
+  {
+    // LD-700 seeded earlier: one approved row owns it, one renewal links to it.
+    const hist = await jsonReq('GET', '/api/admin/applications/borrower/LD-700', null, authH('admin'));
+    check('borrower history → 200', hist.status === 200, String(hist.status));
+    const refs = (hist.body || []).map((r) => r.reference_id);
+    check('history includes the owning approved row', refs.includes('GR8-APPROVED1'), JSON.stringify(refs));
+    check('history includes the linked renewal', (hist.body || []).some((r) => r.linked_borrower_id === 'LD-700'), JSON.stringify(refs));
+    check('history excludes unrelated borrowers', (hist.body || []).every((r) => r.loandisk_borrower_id === 'LD-700' || r.linked_borrower_id === 'LD-700'), JSON.stringify(refs));
+
+    const histNoAuth = await jsonReq('GET', '/api/admin/applications/borrower/LD-700', null, {});
+    check('borrower history without auth → 401', histNoAuth.status === 401, String(histNoAuth.status));
+
+    const histEmpty = await jsonReq('GET', '/api/admin/applications/borrower/LD-NONE', null, authH('admin'));
+    check('unknown borrower id → empty array', histEmpty.status === 200 && Array.isArray(histEmpty.body) && histEmpty.body.length === 0, JSON.stringify(histEmpty.body));
   }
 
   // -----------------------------------------------------------------------
