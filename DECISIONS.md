@@ -302,3 +302,19 @@ How to pull the signal: Railway CLI (linked: project `gr8-backend`, service `loa
 **Cost:** approvals for renewals now carry the same file-transfer latency as new applications. The existing `FILE_TRANSFER_CONCURRENCY = 4` batching already bounds this.
 
 **Not done:** no de-duplication against files already on the Loandisk record. A borrower renewing repeatedly accumulates document copies there. Deferred — Loandisk exposes no per-file listing to diff against, and duplicate documents are a smaller problem than missing ones.
+
+---
+
+## 020 — Renewal score provenance on the number (2026-08-04)
+
+**Problem, raised by the frontend team:** on an attributed row, `finscore_raw` / `finscore_normalized` are copied from the source application (018), so the admin approver screen renders a carried-over score identically to a freshly measured one. `finscore_attributed` was the only distinguishing field, which put the entire signal in an amber notice sitting beside the number rather than on it. Anything separating the two — a collapsed panel, a print view, a screenshot — leaves a bare value reading as measured-today, on the one screen where staleness changes the lending decision.
+
+**Why the copy stays:** `computeCompositeScore` reads `finscore_normalized` (`routes/admin.js`, `routes/ci.js`). Nulling it on attributed rows would be the more honest schema — no score was measured for that application — but it breaks both scoring call sites, changes a shape the admin list already ships, and does not solve the display problem, since the approver still needs a number.
+
+**Decision:** add `renewal_source_submitted_at` + `renewal_source_reference_id`, copied at submit alongside the existing attributed fields, so the age travels with the value: `555 · carried over, measured 12 Jun 2026 (GR8-1780422)`. `renewal_source_application_id` (017) already pointed at the source row but is a UUID — unrenderable for staff, and resolving it would cost a second lookup on the slowest screen.
+
+Set **only** on the FinScore fast-path. A renewal that re-ran FinScore measured its own score and carries no provenance; labelling it as carried over would be the same misread in the opposite direction. Both directions are covered by tests.
+
+**Display, agreed with the operator:** provenance renders inline with the value, with the amber notice kept as reinforcement rather than as the sole signal. A 5-day-old and an 89-day-old score are both legal under the 90-day window and are not the same risk, which is why the date is shown rather than a bare "carried over" flag.
+
+**Migration 018 is a deploy gate** — `/submit` writes both columns on every submission. It also backfills rows written between 017 and 018 so existing renewals render provenance instead of showing a carried-over score with no age.
