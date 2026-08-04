@@ -261,3 +261,32 @@ How to pull the signal: Railway CLI (linked: project `gr8-backend`, service `loa
 
 ### Adjacent gap flagged, NOT fixed (decide later)
 `/submit-group` has no loan-type **allowlist** (the L1 guard `/submit` has via `SINGLE_MEMBER_LOAN_TYPES`). An unexpected type sent to the group route skips the member/amount gates rather than being rejected. Separate from the casing fix.
+
+---
+
+## 018 — Server-Derived Renewal + FinScore Attribution
+**Date:** 2026-08-04
+**Status:** Active
+
+**Before:** Renewal status was whatever the frontend put in `application_category` / `linked_borrower_id` (decision 013). `/submit` validated the borrower id only by checking it existed on *some* application — never that it belonged to the submitting applicant. FinScore ran on every submission with no reuse. The "returning applicant" concept lived in a third, unconnected place: a flat +10 `reapplication_bonus` driven by a CI-officer checkbox (`ci_form_data.is_reapplication`), copied byte-for-byte into `routes/admin.js` and `routes/ci.js`.
+
+**After:**
+- `services/renewal.js` — pure `evaluateRenewal(priorApproved, latestDecline, nowMs)`. The submit route batches a prior-approval lookup into the existing `Promise.all` pre-check (no extra round trip) and the server decides. Frontend values are a hint; a submitted `linked_borrower_id` that does not match the applicant's own approval is discarded and logged.
+- Two decoupled outcomes: **borrower reuse** (any prior approved row with a `loandisk_borrower_id`, no time limit) and the **FinScore fast-path** (borrower reuse + source `submitted_at` within 90 days + a usable prior FinScore). Refusal reasons are logged: `score_outside_recency_window`, `prior_finscore_unusable`, `decline_postdates_approval`, `prior_submitted_at_unreadable`.
+- A decline that postdates the approval blocks the fast-path but keeps borrower reuse. `prior_decline_flag` (already written since 2026-06) is now exposed in `CI_FIELDS` — it had been invisible to CI officers.
+- `computeCompositeScore()` extracted to `services/loanCalc.js`; both scoring routes call it. Renewals suppress the +10 bonus — attribution replaces it rather than stacking (a prior 85 would otherwise become 95 on no new evidence).
+- `GET /api/admin/applications/borrower/:borrowerId` — every application for one client, matching `loandisk_borrower_id` OR `linked_borrower_id`.
+
+**Migration:** 017_renewal_fast_path.sql — `renewal_source_application_id`, `finscore_attributed`, `attributed_final_score`, `idx_applications_phone_approved`.
+
+**Why:** FinScore is a paid per-call API and a returning borrower scored 30 days ago does not need re-measuring. More importantly, renewal status decided a Loandisk write path and was trusted from the client.
+
+**Security:** closes the unowned-`linked_borrower_id` path. `services/pipeline.js` skips borrower creation *and* KYC file upload for renewals, so a submission carrying an enumerated borrower id (via `GET /api/borrowers/search`) could attach a loan to another person's Loandisk record with no documents.
+
+**Deliberately NOT done:**
+- **No `is_renewal` column.** `application_category='renewal'` already is that flag; a second column would be duplicate state.
+- **No `clients` table.** Client identity is `loandisk_borrower_id`. Nothing new introduced.
+- **`/submit-group` unchanged.** Renewal has never applied to group/SBL (per-member linkage does not exist) and adding it was out of scope.
+- **'closed' status not introduced.** Loan closure lives in Loandisk; gating on `approved` is strictly wider and needs no new call on the intake path.
+
+**Open item:** server-derived renewal means *more* applications now classify as renewal than when the frontend declared it — and `services/pipeline.js` skips Loandisk file upload for all of them, on the assumption that "renewals already have docs in Loandisk". Fresh KYC (updated payslips, re-issued ID) will now stop reaching Loandisk for returning borrowers who never declared a renewal. Files still land in Supabase Storage. Confirm with ops whether renewals should re-upload documents.

@@ -51,6 +51,7 @@ services/
   pipeline.js               — Pipeline stage transition logic and Loandisk push on approval
   compress.js               — Sharp-based image compression for uploads
   tokens.js                 — Token generation/validation for SO confirmation links
+  renewal.js                — Server-derived renewal eligibility + FinScore attribution (pure)
 middleware/
   auth.js                   — JWT verification via Supabase Auth + requireRole RBAC
   preQualify.js             — Empty (logic inlined in routes)
@@ -70,6 +71,7 @@ middleware/
 | GET | `/api/admin/applications/:id` | Bearer JWT | Single application detail |
 | GET | `/api/admin/applications/:id/files` | Bearer JWT | Signed file URLs |
 | GET | `/api/admin/applications/phone/:phone` | Bearer JWT | Lookup by phone |
+| GET | `/api/admin/applications/borrower/:borrowerId` | Bearer JWT | All applications for one client (Loandisk borrower id) |
 | PATCH | `/api/admin/applications/:id/ci-score` | JWT + role(admin, super_admin, ci_officer) | Record CI interview score |
 | PATCH | `/api/admin/applications/:id/approve` | JWT + role(admin, super_admin) | Approve → push to Loandisk |
 | PATCH | `/api/admin/applications/:id/decline` | JWT + role(admin, super_admin) | Decline application |
@@ -115,7 +117,7 @@ OWNER_EMAIL               # Receives problem reports
 
 1. **FinScore** (prepaid 300–600 raw) → normalized: `(raw - 300) / 300 * 100`
 2. **CI Score** (0–50 raw) → normalized: `(raw / 50) * 100`
-3. **Final Score** = `(finNorm * 0.50 + ciNorm * 0.50)` rounded to 1 decimal + reapplication bonus (10 if applicable), capped at 100
+3. **Final Score** = `(finNorm * 0.50 + ciNorm * 0.50)` rounded to 1 decimal + reapplication bonus (10 if applicable), capped at 100. Computed by `computeCompositeScore()` in `services/loanCalc.js` — shared by the admin and CI routes. **Renewals do not take the bonus:** they already inherit the prior FinScore, so attribution replaces the bonus.
 4. **Tiers:** ≥85 = `approved`, ≥70 = `tier_b`, <70 = `declined`
 
 ## Loan Types & Pre-Qualification
@@ -132,7 +134,13 @@ Age requirement: 21–65 for all types. Mobile format: `09XXXXXXXXX`.
 
 ## Application Workflow
 
-1. Applicant submits → pre-qual checks → FinScore API call → image compression → files to Supabase Storage → record saved as `pending` → email notifications sent
+1. Applicant submits → pre-qual checks → **renewal resolution (server-derived, `services/renewal.js`)** → FinScore API call *(skipped on the renewal fast-path)* → image compression → files to Supabase Storage → record saved as `pending` → email notifications sent
+
+**Renewal resolution.** `application_category` / `linked_borrower_id` arrive from the frontend but are a hint only — the phone is matched against the applicant's own prior applications and the server decides. Two independent outcomes:
+   - *Borrower reuse* (`application_category='renewal'`): any prior `status='approved'` row with a `loandisk_borrower_id`. No time limit. Lets approval attach to the existing Loandisk borrower.
+   - *FinScore fast-path* (`finscore_attributed=true`): borrower reuse **plus** the source row's `submitted_at` within 90 days **and** a usable prior FinScore. Skips the FinScore call and copies `finscore_raw` / `finscore_normalized`; `attributed_final_score` records the prior composite for audit.
+
+   Refused fast-path reasons (logged, borrower reuse still applies): `score_outside_recency_window`, `prior_finscore_unusable` (manual-override source), `decline_postdates_approval`, `prior_submitted_at_unreadable`. A prior decline still raises `prior_decline_flag` for CI, which now sees it via `CI_FIELDS`.
 2. Pipeline stages: `sales_officer` → `verifier` → `ci_officer` → `approver` → `loan_processing_officer` (with email automation on each transition). `declined` is a terminal branch from `approver`. Backward returns: only `verifier` → `sales_officer` is permitted.
 3. CI agent conducts interview → submits CI score → auto-advances to approver stage
 4. Admin reviews → final score + tier calculated (with reapplication bonus if applicable)
@@ -141,7 +149,9 @@ Age requirement: 21–65 for all types. Mobile format: `09XXXXXXXXX`.
 
 ## Supabase Schema (applications table)
 
-**applications:** `id`, `reference_id` (GR8-{timestamp}), `phone`, `loan_type`, `full_name`, `form_data` (jsonb), `finscore_raw`, `finscore_normalized`, `ci_score`, `ci_normalized`, `final_score`, `tier`, `status`, `stage`, `loandisk_borrower_id`, `file_metadata` (jsonb), `group_members` (jsonb), `ci_form_data` (jsonb), `ci_recommendation`, `ci_remarks`, `ci_recommended_amount`, `interviewer`, `so_confirmation_sent_at`, `submitted_at`, `reviewed_at`
+**applications:** `id`, `reference_id` (GR8-{timestamp}), `phone`, `loan_type`, `full_name`, `form_data` (jsonb), `finscore_raw`, `finscore_normalized`, `ci_score`, `ci_normalized`, `final_score`, `tier`, `status`, `stage`, `loandisk_borrower_id`, `file_metadata` (jsonb), `group_members` (jsonb), `ci_form_data` (jsonb), `ci_recommendation`, `ci_remarks`, `ci_recommended_amount`, `interviewer`, `so_confirmation_sent_at`, `submitted_at`, `reviewed_at`, `application_category`, `linked_borrower_id`, `renewal_source_application_id`, `finscore_attributed`, `attributed_final_score`, `prior_decline_flag`, `prior_decline_reference`
+
+> There is **no** `clients`/`borrowers` table. Client identity is `loandisk_borrower_id` (external Loandisk id, populated on first approval). `linked_borrower_id` points at it from renewals.
 
 **admin_users:** `id` (FK to Supabase Auth), `email`, `full_name`, `roles` (text[]), `is_active`
 
