@@ -19,3 +19,7 @@ docs/*.log
 # Local scratch / personal notes (not project docs)
 BLOCKER.md
 task.md
+.pipeline/
+
+# Exported application rows (real applicant PII — phone, name, email, KYC)
+archived-*.json
