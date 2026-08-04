@@ -78,6 +78,7 @@ middleware/
 | GET | `/api/admin/export/consent` | JWT + role(admin, super_admin) | Export consent data |
 | GET | `/api/ci/applications` | JWT + role(ci_officer, admin, super_admin, approver) | List pending (limited fields) |
 | GET | `/api/ci/applications/phone/:phone` | JWT + role(ci_officer, admin, super_admin, approver) | CI lookup by phone |
+| GET | `/api/ci/applications/borrower/:borrowerId` | JWT + role(ci_officer, admin, super_admin, approver) | Client history for CI (CI_FIELDS projection) |
 | PATCH | `/api/ci/applications/:id/ci-score` | JWT + role(ci_officer, admin, super_admin, approver) | Submit CI score (limited response) |
 | GET/PATCH | `/api/users/*` | Bearer JWT | Admin user CRUD |
 | PATCH | `/api/pipeline/:id/transition` | Bearer JWT | Advance pipeline stage |
@@ -144,7 +145,7 @@ Age requirement: 21–65 for all types. Mobile format: `09XXXXXXXXX`.
 2. Pipeline stages: `sales_officer` → `verifier` → `ci_officer` → `approver` → `loan_processing_officer` (with email automation on each transition). `declined` is a terminal branch from `approver`. Backward returns: only `verifier` → `sales_officer` is permitted.
 3. CI agent conducts interview → submits CI score → auto-advances to approver stage
 4. Admin reviews → final score + tier calculated (with reapplication bonus if applicable)
-5. Admin approves → borrower created in Loandisk → files transferred from Supabase to Loandisk via presigned S3 URLs
+5. Admin approves → borrower created in Loandisk (renewals reuse the linked borrower instead) → files transferred from Supabase to Loandisk via presigned S3 URLs on **every** approval, renewals included (decision 019)
 6. SO confirmation via tokenized email link at any stage
 
 ## Supabase Schema (applications table)

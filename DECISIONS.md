@@ -184,7 +184,7 @@ Chronological record of major architectural decisions, pivots, and tradeoffs. Ea
 **After:**
 - `GET /api/borrowers/search?q=` — public, rate-limited (30/min), Supabase-sourced from rows where `loandisk_borrower_id IS NOT NULL`. Min 2-char query, max 10 results, deduped by `loandisk_borrower_id`.
 - `POST /api/application/submit` accepts `application_category` (`'new'` | `'renewal'`) and `linked_borrower_id` at the top level. Renewal without a valid linked id → 400.
-- Approval guard: when `application_category='renewal'` and `linked_borrower_id` is set, `executeLoandiskApproval` skips `createBorrower` + file upload and uses the linked borrower id directly. `loandisk_borrower_id` is also reused on retry (idempotency for ops).
+- Approval guard: when `application_category='renewal'` and `linked_borrower_id` is set, `executeLoandiskApproval` skips `createBorrower` and uses the linked borrower id directly. `loandisk_borrower_id` is also reused on retry (idempotency for ops). *(File upload was skipped here too until 2026-08-04 — see decision 019.)*
 
 **Migration:** 008_renewal_and_sa_confirmation.sql — adds `application_category`, `linked_borrower_id`, indexes on `lower(full_name)` and `phone` for search performance.
 
@@ -281,7 +281,7 @@ How to pull the signal: Railway CLI (linked: project `gr8-backend`, service `loa
 
 **Why:** FinScore is a paid per-call API and a returning borrower scored 30 days ago does not need re-measuring. More importantly, renewal status decided a Loandisk write path and was trusted from the client.
 
-**Security:** closes the unowned-`linked_borrower_id` path. `services/pipeline.js` skips borrower creation *and* KYC file upload for renewals, so a submission carrying an enumerated borrower id (via `GET /api/borrowers/search`) could attach a loan to another person's Loandisk record with no documents.
+**Security:** closes the unowned-`linked_borrower_id` path. `services/pipeline.js` skipped borrower creation *and* (at the time) KYC file upload for renewals, so a submission carrying an enumerated borrower id (via `GET /api/borrowers/search`) could attach a loan to another person's Loandisk record with no documents. Borrower creation is still skipped for renewals; the file upload is not (019). The fix is the ownership check on submit, not the upload behaviour.
 
 **Deliberately NOT done:**
 - **No `is_renewal` column.** `application_category='renewal'` already is that flag; a second column would be duplicate state.
@@ -289,4 +289,16 @@ How to pull the signal: Railway CLI (linked: project `gr8-backend`, service `loa
 - **`/submit-group` unchanged.** Renewal has never applied to group/SBL (per-member linkage does not exist) and adding it was out of scope.
 - **'closed' status not introduced.** Loan closure lives in Loandisk; gating on `approved` is strictly wider and needs no new call on the intake path.
 
-**Open item:** server-derived renewal means *more* applications now classify as renewal than when the frontend declared it — and `services/pipeline.js` skips Loandisk file upload for all of them, on the assumption that "renewals already have docs in Loandisk". Fresh KYC (updated payslips, re-issued ID) will now stop reaching Loandisk for returning borrowers who never declared a renewal. Files still land in Supabase Storage. Confirm with ops whether renewals should re-upload documents.
+**Resolved (was an open item):** server-derived renewal classifies *more* applications as renewal than the frontend-declared flow did, and `services/pipeline.js` skipped Loandisk file upload for all of them on the assumption that "renewals already have docs in Loandisk". That would have stopped fresh KYC (updated payslips, re-issued IDs) from reaching Loandisk for returning borrowers who never declared a renewal — silently, since files still land in Supabase Storage and the approval reports success. Ops confirmed 2026-08-04 that current documents must be on the borrower record every time. The `isRenewal` guard on the file transfer is removed; borrower *creation* is still skipped for renewals. See decision 019.
+
+---
+
+## 019 — Renewals upload KYC files to Loandisk (2026-08-04)
+
+**Decision:** the Loandisk file transfer in `executeLoandiskApproval` runs on every approval, renewals included. Borrower reuse is unaffected — a renewal still attaches to its linked borrower instead of creating a new one.
+
+**Why:** the skip was defensible when renewals were rare and self-declared. Once detection moved server-side (018), it silently degraded the document trail for any returning applicant. The failure mode was invisible to staff: approval succeeds, files reach Supabase Storage, only the Loandisk record goes stale.
+
+**Cost:** approvals for renewals now carry the same file-transfer latency as new applications. The existing `FILE_TRANSFER_CONCURRENCY = 4` batching already bounds this.
+
+**Not done:** no de-duplication against files already on the Loandisk record. A borrower renewing repeatedly accumulates document copies there. Deferred — Loandisk exposes no per-file listing to diff against, and duplicate documents are a smaller problem than missing ones.
