@@ -2,16 +2,31 @@ const express = require('express')
 const multer = require('multer')
 const router = express.Router()
 // Bound the public upload path (H9): unbounded memoryStorage + upload.any()
-// let a caller buffer arbitrary files in RAM. Cap each file at 5MB. The file
-// count must cover a full group: observed groups run <=6 members × ~6 files,
-// so 60 (10 members × 6) covers the real range with headroom while capping
-// worst-case buffered RAM at ~300MB. Also bounds concurrent sharp decodes.
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+// let a caller buffer arbitrary files in RAM. Cap each file at 10MB: the
+// previous 5MB cap sat below what a current phone camera produces, so multer
+// aborted whole applications mid-upload before any handler ran — four AKAP
+// submissions were lost that way on 2026-09-07 with nothing saved. Compression
+// (services/compress.js) runs after multer, so it could never rescue an
+// oversized photo. The file count must cover a full group: observed groups run
+// <=6 members × ~6 files, so 60 (10 members × 6) covers the real range with
+// headroom while capping worst-case buffered RAM at ~600MB. The raise does not
+// widen the sharp decode peak — that is bounded by limitInputPixels (24MP),
+// which is a pixel budget, not a byte one.
+const MAX_UPLOAD_MB = 10
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 const MAX_UPLOAD_FILES = 60
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_UPLOAD_FILES }
 })
+
+// Mask a mobile down to its last 4 digits for logging. Enough to pin a failed
+// attempt to an applicant when cross-referencing, without parking full PII in
+// Railway's log retention.
+function maskMobile(value) {
+  const digits = String(value || '').replace(/\D/g, '')
+  return digits.length >= 4 ? `***${digits.slice(-4)}` : null
+}
 
 // Run upload.any() but translate multer's limit errors into clean 400s instead
 // of letting them fall through to a default 500 HTML page.
@@ -20,10 +35,32 @@ function handleUpload(req, res, next) {
   uploadAny(req, res, (err) => {
     if (!err) return next()
     const message = err.code === 'LIMIT_FILE_SIZE'
-      ? 'A file exceeds the 5MB size limit.'
+      ? `A file exceeds the ${MAX_UPLOAD_MB}MB size limit.`
       : err.code === 'LIMIT_FILE_COUNT'
         ? `Too many files (max ${MAX_UPLOAD_FILES}).`
         : 'File upload failed. Please try again.'
+    // Multer rejects before the route handler runs, so an unlogged 400 here is
+    // invisible in production: the applicant is told "nothing was saved" and
+    // the server records only a bare status line — no name, no limit, no field.
+    // Log enough to answer "who failed, and on what" from Railway alone.
+    // busboy assigns text fields in stream order, so any field the client sent
+    // before the offending file is already on req.body; fields sent after it
+    // are not, hence the null fallbacks. err.field names the offending file's
+    // form field on LIMIT_FILE_SIZE, which identifies the exact document.
+    console.error('[upload] rejected', {
+      route: req.originalUrl,
+      code: err.code || 'UNKNOWN',
+      field: err.field || null,
+      applicant: [req.body?.firstName, req.body?.lastName].filter(Boolean).join(' ') || null,
+      group_name: req.body?.groupName || null,
+      loan_type: req.body?.loanType || null,
+      mobile: maskMobile(req.body?.mobile),
+      content_length: req.headers['content-length'] || null,
+      files_buffered: Array.isArray(req.files) ? req.files.length : 0,
+      limits: { max_file_bytes: MAX_UPLOAD_BYTES, max_files: MAX_UPLOAD_FILES },
+      ip: req.ip,
+      error: err.message
+    })
     return res.status(400).json({ status: 'error', message })
   })
 }
