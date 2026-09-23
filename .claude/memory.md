@@ -79,3 +79,26 @@ Read this file at the start of every session. Append key decisions, discoveries,
 - **Fix (commit `9c98927`, index.js):** reject disallowed origins with `callback(null, false)` instead of throwing → cors omits `Access-Control-Allow-Origin`, browser blocks, no 500. Added `console.warn('[cors] blocked disallowed origin: <origin>')` so the missing origin is now diagnosable from logs. Verified locally (allowed→200+ACAO; disallowed→200 no ACAO, was 500; preflight allowed→204+ACAO+methods).
 - **Still open (needs ops):** (1) merge branch → `main` to auto-deploy the fix; (2) after deploy, read logs for `[cors] blocked disallowed origin:` to capture the real frontend origin, then set `CORS_ORIGINS` on Railway (comma-separated, include apex+www+that origin) to actually restore that user. The code fix stops the 500s but does NOT by itself re-admit the blocked origin.
 - **UAT artifact:** Postman collection "GR8 Loan Backend — CORS UAT (index.js:62 fix)" created in the team workspace (asserts the 5 CORS cases; point it at prod after deploy). Live curl against prod isn't possible from the agent env (proxy denies the Railway host by policy); local curl UAT used instead.
+
+---
+
+## 2026-09-21 — Weekly health check (branch `claude/gifted-mayer-4mfr98`)
+
+- **Infra (Railway MCP):** deploy `SUCCESS` and stable since 2026-09-07 (commit `50be3cc`, HEAD of `main`); service `loan-backend` online, 1/1 replica, no crashes. No errors in deploy logs.
+- **Reliability:** HTTP error rate **0%** over the last 7 days (858 requests, 0×5xx, 44×4xx = normal client rejections). Worst bucket still 0% 5xx.
+- **Resources — all idle, no limits approaching:** CPU ~0% (max 0.06 cores), memory 0.54 GB / 8 GB (~7%), disk ~0. Network negligible.
+- **Git/GitHub:** no open PRs, no open issues; branch in sync with `main`. No unmerged critical fixes pending. CORS fix from 2026-07-20 confirmed merged+deployed (PR #3, commit `3a18371`).
+- **ISSUE — vulnerable dependencies (`npm audit`: 5 vulns, 3 high).** Directly relevant because `/submit`, `/submit-group`, `/reports/problem` are unauthenticated multipart upload endpoints and every image runs through sharp (`services/compress.js`, incl. HEIC/HEIF):
+  - `multer` 2.1.0→2.4.0 (HIGH, direct): DoS via crafted field names, FD leak on aborted uploads, size-limit bypass via async fileFilter race. Fix: `npm audit fix` (stays in 2.x, non-breaking).
+  - `sharp` 0.34.5→0.35.4 (HIGH, direct): libvips/libheif CVEs via malicious images. `limitInputPixels`+`failOn:'error'` mitigate DoS but not memory-corruption CVEs. Fix: `npm audit fix --force` (0.34→0.35 minor; smoke-test compression before deploy).
+  - `ip-address` <=10.3.0 (HIGH, transitive): SSRF/trust-boundary bypass. Fix: `npm audit fix`.
+  - `qs` (moderate DoS) + `dotenv` (minor) cleared by `npm audit fix`.
+  - Remediation plan: apply the non-breaking `npm audit fix` set (multer/ip-address/qs) on this branch, then bump sharp separately and verify compress.js locally, before merging (main auto-deploys, no test gate). **Not applied — awaiting go-ahead.**
+- **Open ops item (carried from 2026-07-20):** `CORS_ORIGINS` still unset on Railway. Not an outage (code no longer 500s on disallowed origins), but any frontend origin other than gr8lendingcorporation.com ± www is silently blocked. Needs the real origin from `[cors] blocked` logs.
+
+### 2026-09-23 — dependency fix applied (commit `eb79244`, this branch)
+
+- **Applied** on go-ahead: `npm audit fix` (multer 2.1.0→2.4.0, ip-address→10.7.2, qs→6.16.0, dotenv patched) + `npm audit fix --force` for sharp 0.34.5→0.35.4 (libvips 8.18.6). `npm audit` now reports **0 vulnerabilities**. Only `package.json` (`sharp ^0.35.4`) + `package-lock.json` changed; multer moved via lockfile only (`^2.1.0` already admitted 2.4.0).
+- **Verified before push:** smoke test of `services/compress.js` under sharp 0.35.4 — PNG→JPEG resize to 2000px (90% reduction), malformed image still hits the `failOn:'error'` fallback and returns the original, PDF passthrough + magic-byte detection unchanged. `multer` 2.4.0 memoryStorage config constructs cleanly.
+- **Deploy mechanism confirmed:** no Dockerfile / railway config → Railway Nixpacks runs `npm ci` from the lockfile. `node_modules` is only PARTIALLY tracked in git (Express/multer/axios/qs but NOT sharp/@supabase/express-rate-limit/@img), which proves the committed `node_modules` is vestigial and the lockfile is authoritative for the deploy. Raised a suggested task to gitignore + untrack `node_modules` (drift risk). **The fix reaches prod only when this branch merges to `main`.**
+- **UAT artifact (Postman MCP):** collection "GR8 Loan Backend — Dependency Security UAT (multer 2.4 / sharp 0.35)" + environment "GR8 Backend — UAT target" created in the team workspace (`c83730a7…`). Folder 0 asserts the live commit SHA != pre-fix build `50be3cc`; folder 1 = SAFE malformed-input-rejected-cleanly (4xx not 5xx, <5s, no DB write/email); folder 2 = STAGING-ONLY side-effecting (valid submit / corrupt-image sharp fallback). Not executed from here (this MCP can't run requests; agent proxy blocks the Railway host) — run via Runner/Newman after the branch deploys.
