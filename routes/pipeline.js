@@ -26,6 +26,25 @@ router.patch('/:id/transition', async (req, res) => {
       return res.status(400).json({ error: 'to_stage is required' });
     }
 
+    // Declined-tier apps stay on the admin dashboard. Override approval goes only
+    // through PATCH /api/admin/applications/:id/approve (supervisor + override:true),
+    // so the board's approver->loan_processing_officer path refuses them outright.
+    if (to_stage === 'loan_processing_officer') {
+      const { data: gateRow, error: gateErr } = await supabase
+        .from('applications')
+        .select('tier')
+        .eq('id', req.params.id)
+        .single();
+      if (gateErr || !gateRow) {
+        return res.status(404).json({ error: 'Application not found' });
+      }
+      if (gateRow.tier === 'declined') {
+        return res.status(400).json({
+          error: 'Declined-tier applications cannot be approved from the pipeline board. Use the application page with a supervisor override.'
+        });
+      }
+    }
+
     const updated = await transitionStage(req.params.id, to_stage, req.user, meta || {});
     return res.json(updated);
   } catch (error) {

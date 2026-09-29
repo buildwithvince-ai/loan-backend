@@ -919,10 +919,30 @@ async function run() {
     check('declined override by admin (non-supervisor) → 403', adminOv.status === 403 && adminOv.body.error?.code === 'OVERRIDE_FORBIDDEN', JSON.stringify(adminOv.body));
     check('admin override did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
 
+    // 2b. declined via the pipeline/Kanban path → refused, even for a supervisor.
+    // Override approval is only allowed through /approve (supervisor + override:true).
+    // Row already carries a release date (e.g. after an SA confirm-terms round), so only the tier gate can stop it.
+    db.applications.find((a) => a.id === r.id).loan_release_date = RELEASE_DATE;
+    const pipeRes = await jsonReq('PATCH', `/api/pipeline/${r.id}/transition`, { to_stage: 'loan_processing_officer', meta: {} }, authH('approver'));
+    check('declined via pipeline transition → refused (tier gate)', pipeRes.status === 400 && /declined/i.test(pipeRes.body.error || ''), JSON.stringify({ s: pipeRes.status, b: pipeRes.body }));
+    check('pipeline-refused declined did NOT advance stage', db.applications.find((a) => a.id === r.id).stage === 'approver', db.applications.find((a) => a.id === r.id).stage);
+
     // 3. declined + override by approver (supervisor) → 200, reaches LPO
     const supOv = await jsonReq('PATCH', `/api/admin/applications/${r.id}/approve`, { override: true, loan_release_date: RELEASE_DATE }, authH('approver'));
     check('declined override by approver (supervisor) → 200 approved', supOv.status === 200 && supOv.body.status === 'approved', JSON.stringify(supOv.body));
     check('override approve reached loan_processing_officer', db.applications.find((a) => a.id === r.id).stage === 'loan_processing_officer', db.applications.find((a) => a.id === r.id).stage);
+
+    // 4. tier_b via the pipeline/Kanban path → still allowed (only declined-tier is gated).
+    // finNorm 70 + ci 35 (→ci_norm 70): final = 70 → tier_b.
+    FINSCORE['09197777777'] = { score: 510, normalized: 70, noScore: false };
+    await postForm('/api/application/submit', validForm({ mobile: '09197777777' }));
+    const tb = db.applications.find((a) => a.phone === '09197777777' && a.status === 'pending');
+    await transitionStage(tb.id, 'ci_officer', { id: userId('verifier'), roles: ['verifier'], full_name: 'v' }, {});
+    const tbCi = await jsonReq('PATCH', `/api/admin/applications/${tb.id}/ci-score`, { ci_score: 35, ...REPAY }, adminSecretH);
+    check('setup: tier_b parked at approver', tbCi.body.tier === 'tier_b' && db.applications.find((a) => a.id === tb.id).stage === 'approver', JSON.stringify({ t: tbCi.body.tier }));
+    db.applications.find((a) => a.id === tb.id).loan_release_date = RELEASE_DATE;
+    const tbPipe = await jsonReq('PATCH', `/api/pipeline/${tb.id}/transition`, { to_stage: 'loan_processing_officer', meta: {} }, authH('approver'));
+    check('tier_b via pipeline transition → 200, reaches LPO', tbPipe.status === 200 && db.applications.find((a) => a.id === tb.id).stage === 'loan_processing_officer', JSON.stringify({ s: tbPipe.status, e: tbPipe.body.error }));
   }
 
   // -----------------------------------------------------------------------
