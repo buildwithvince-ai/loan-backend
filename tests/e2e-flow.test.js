@@ -1059,6 +1059,67 @@ async function run() {
   }
 
   // -----------------------------------------------------------------------
+  section('SALES OFFICER — inactive SO emails route to active SOs');
+  // -----------------------------------------------------------------------
+  {
+    // Runs last: adds a departed (inactive) SO and a second active SO.
+    const departedId = newId();
+    const secondId = newId();
+    db.admin_users.push({ id: departedId, email: 'departed@gr8.test', full_name: 'departed so', roles: ['sales_officer'], is_active: false });
+    db.admin_users.push({ id: secondId, email: 'second@gr8.test', full_name: 'second so', roles: ['sales_officer'], is_active: true });
+    const activeSOs = [userId('sales_officer'), secondId].sort().join(',');
+    const settle = () => new Promise((r) => setTimeout(r, 20)); // transition email hooks are fire-and-forget
+    const recipientsOf = (fn, appId) => emailCalls
+      .filter((c) => c.fn === fn && c.args[1] && c.args[1].id === appId)
+      .map((c) => c.args[0].id).sort().join(',');
+    const verifier = { id: userId('verifier'), roles: ['verifier'], full_name: 'v' };
+
+    // Rework return on an app still assigned to the departed SO
+    FINSCORE['09197000001'] = { score: 540, normalized: 80, noScore: false };
+    await postForm('/api/application/submit', validForm({ mobile: '09197000001' }));
+    const a = db.applications.find((x) => x.phone === '09197000001' && x.status === 'pending');
+    a.assigned_sales_officer = departedId;
+    await transitionStage(a.id, 'sales_officer', verifier, { return_reason: 'Missing payslip' });
+    await settle();
+    check('return for inactive SO → sent to every active SO, not the departed one', recipientsOf('notifySOReturn', a.id) === activeSOs, recipientsOf('notifySOReturn', a.id));
+
+    // Same return for an active assignee stays with that SO only
+    FINSCORE['09197000002'] = { score: 540, normalized: 80, noScore: false };
+    await postForm('/api/application/submit', validForm({ mobile: '09197000002' }));
+    const b = db.applications.find((x) => x.phone === '09197000002' && x.status === 'pending');
+    b.assigned_sales_officer = secondId;
+    await transitionStage(b.id, 'sales_officer', verifier, { return_reason: 'Missing payslip' });
+    await settle();
+    check('return for active SO → that SO only', recipientsOf('notifySOReturn', b.id) === secondId, recipientsOf('notifySOReturn', b.id));
+
+    // Decline decision on an app assigned to the departed SO
+    FINSCORE['09197000003'] = { score: 540, normalized: 90, noScore: false };
+    await postForm('/api/application/submit', validForm({ mobile: '09197000003' }));
+    const c = db.applications.find((x) => x.phone === '09197000003' && x.status === 'pending');
+    c.assigned_sales_officer = departedId;
+    await transitionStage(c.id, 'ci_officer', verifier, {});
+    await jsonReq('PATCH', `/api/admin/applications/${c.id}/ci-score`, { ci_score: 40, ...REPAY }, adminSecretH);
+    await transitionStage(c.id, 'declined', { id: userId('approver'), roles: ['approver'], full_name: 'a' }, { decline_reason: 'Below threshold' });
+    await settle();
+    check('decline for inactive SO → sent to every active SO', recipientsOf('notifySODecision', c.id) === activeSOs, recipientsOf('notifySODecision', c.id));
+
+    // SO confirmation request on an app assigned to the departed SO
+    const conf = await jsonReq('POST', `/api/pipeline/${a.id}/so-confirmation`, null, authH('admin'));
+    check('so-confirmation for inactive SO → 200', conf.status === 200, JSON.stringify(conf.body));
+    check('so-confirmation sent to every active SO', recipientsOf('sendSOConfirmationRequest', a.id) === activeSOs, recipientsOf('sendSOConfirmationRequest', a.id));
+    check('so-confirmation sent_to omits departed SO', !String(conf.body.sent_to).includes('departed@'), conf.body.sent_to);
+
+    // Assignment only accepts active sales officers
+    const assign = (soId) => jsonReq('PATCH', `/api/pipeline/${b.id}/assign-sales-officer`, { sales_officer_id: soId }, authH('admin'));
+    const toDeparted = await assign(departedId);
+    check('assign inactive SO → 400', toDeparted.status === 400, JSON.stringify(toDeparted.body));
+    const toVerifier = await assign(userId('verifier'));
+    check('assign non-SO user → 400', toVerifier.status === 400, JSON.stringify(toVerifier.body));
+    const toActive = await assign(userId('sales_officer'));
+    check('assign active SO → 200 + saved', toActive.status === 200 && db.applications.find((x) => x.id === b.id).assigned_sales_officer === userId('sales_officer'), JSON.stringify(toActive.body));
+  }
+
+  // -----------------------------------------------------------------------
   // Summary
   // -----------------------------------------------------------------------
   console.log(`\n\x1b[1mRESULT:\x1b[0m ${pass} passed, ${fail} failed`);

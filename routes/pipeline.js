@@ -93,6 +93,19 @@ router.patch(
         return res.status(400).json({ error: 'sales_officer_id is required' });
       }
 
+      const { data: so, error: soError } = await supabase
+        .from('admin_users')
+        .select('id')
+        .eq('id', sales_officer_id)
+        .contains('roles', ['sales_officer'])
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (soError) throw soError;
+      if (!so) {
+        return res.status(400).json({ error: 'sales_officer_id must be an active sales officer' });
+      }
+
       const { data, error } = await supabase
         .from('applications')
         .update({ assigned_sales_officer: sales_officer_id })
@@ -122,7 +135,7 @@ router.post(
   async (req, res) => {
     try {
       const { generateConfirmationTokens } = require('../services/tokens');
-      const { sendSOConfirmationRequest } = require('../services/email');
+      const { sendSOConfirmationRequest, resolveSORecipients } = require('../services/email');
 
       // Fetch the application
       const { data: application, error: appError } = await supabase
@@ -139,22 +152,20 @@ router.post(
         return res.status(400).json({ error: 'No sales officer assigned to this application' });
       }
 
-      // Fetch the SO user
-      const { data: soUser, error: soError } = await supabase
-        .from('admin_users')
-        .select('id, email, full_name, roles')
-        .eq('id', application.assigned_sales_officer)
-        .single();
+      // Assigned SO, or every active SO if the assigned one was deactivated
+      const soUsers = await resolveSORecipients(application.assigned_sales_officer);
 
-      if (soError || !soUser) {
-        return res.status(400).json({ error: 'Assigned sales officer not found' });
+      if (!soUsers.length) {
+        return res.status(400).json({ error: 'No active sales officer to notify' });
       }
 
       // Generate confirm/decline tokens
       const { confirmToken, declineToken } = await generateConfirmationTokens(req.params.id);
 
       // Send the confirmation email — awaited intentionally (this IS the purpose of the route)
-      await sendSOConfirmationRequest(soUser, application, confirmToken, declineToken);
+      for (const soUser of soUsers) {
+        await sendSOConfirmationRequest(soUser, application, confirmToken, declineToken);
+      }
 
       // Record the timestamp the confirmation was sent
       await supabase
@@ -162,7 +173,7 @@ router.post(
         .update({ so_confirmation_sent_at: new Date().toISOString() })
         .eq('id', req.params.id);
 
-      return res.json({ message: 'SO confirmation email sent', sent_to: soUser.email });
+      return res.json({ message: 'SO confirmation email sent', sent_to: soUsers.map((u) => u.email).join(', ') });
     } catch (error) {
       console.error('[pipeline] so-confirmation error:', error.message);
       return res.status(500).json({ error: 'Internal server error' });

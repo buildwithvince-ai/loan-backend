@@ -3,7 +3,7 @@
 const { supabase } = require('./supabase');
 const { createBorrower, createLoan, uploadFile, schemeIdFromLoanType, isoToMMDDYYYY } = require('./loandisk');
 const { calculateFirstRepaymentDate } = require('./repayment');
-const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision } = require('./email');
+const { notifySalesOfficer, notifyTeamByRole, notifySOReturn, notifySODecision, resolveSORecipients } = require('./email');
 const { getProductConfig, getDefaultInterestRate, LOAN_DEFAULTS } = require('../config/loanProducts');
 
 const VALID_STAGES = [
@@ -561,22 +561,18 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
     try {
       if (toStage === 'sales_officer') {
         // Triggered on verifier->sales_officer return
-        let soUser = null;
-        if (updated.assigned_sales_officer) {
-          const { data: fetchedSO } = await supabase
-            .from('admin_users')
-            .select('id, email, full_name, roles')
-            .eq('id', updated.assigned_sales_officer)
-            .single();
-          soUser = fetchedSO || null;
-        }
+        const soUsers = updated.assigned_sales_officer
+          ? await resolveSORecipients(updated.assigned_sales_officer)
+          : [];
 
-        if (soUser) {
-          // If this is a return (has return_reason), send the return notification
-          if (meta && meta.return_reason) {
-            notifySOReturn(soUser, updated, meta.return_reason);
-          } else {
-            notifySalesOfficer(soUser, updated);
+        if (soUsers.length) {
+          for (const soUser of soUsers) {
+            // If this is a return (has return_reason), send the return notification
+            if (meta && meta.return_reason) {
+              notifySOReturn(soUser, updated, meta.return_reason);
+            } else {
+              notifySalesOfficer(soUser, updated);
+            }
           }
         } else {
           notifyTeamByRole('sales_officer', updated, { message: 'Unassigned lead needs pickup' });
@@ -598,24 +594,14 @@ const transitionStage = async (appId, toStage, user, meta = {}) => {
         notifyTeamByRole('loan_processing_officer', updated, { message: 'Application approved — ready for processing' });
         // Also notify the assigned SO of the approval decision
         if (updated.assigned_sales_officer) {
-          const { data: soUser } = await supabase
-            .from('admin_users')
-            .select('id, email, full_name, roles')
-            .eq('id', updated.assigned_sales_officer)
-            .single();
-          if (soUser) {
+          for (const soUser of await resolveSORecipients(updated.assigned_sales_officer)) {
             notifySODecision(soUser, updated, 'Approved');
           }
         }
 
       } else if (toStage === 'declined') {
         if (updated.assigned_sales_officer) {
-          const { data: soUser } = await supabase
-            .from('admin_users')
-            .select('id, email, full_name, roles')
-            .eq('id', updated.assigned_sales_officer)
-            .single();
-          if (soUser) {
+          for (const soUser of await resolveSORecipients(updated.assigned_sales_officer)) {
             notifySODecision(soUser, updated, 'Declined');
           }
         }
