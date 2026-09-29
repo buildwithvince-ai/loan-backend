@@ -89,6 +89,13 @@ class Query {
     this._filters.push((r) => String(r[c] || '').startsWith(p));
     return this;
   }
+  // Only the `is` operator is used against not() in this codebase
+  // (.not('col', 'is', null) — the renewal source lookup on /submit).
+  not(c, op, v) {
+    if (op !== 'is') throw new Error(`mock not(): unsupported operator ${op}`);
+    this._filters.push((r) => (r[c] ?? null) !== (v ?? null));
+    return this;
+  }
   order(col, opts = {}) { this._order = { col, ascending: opts.ascending !== false }; return this; }
   limit(n) { this._limit = n; return this; }
 
@@ -278,9 +285,9 @@ function buildMultipart({ numFiles = 0, fields = {}, oversizedFile = false } = {
     parts.push('\r\n');
   }
 
-  // Optional single oversized file (> 5MB)
+  // Optional single oversized file (> 10MB)
   if (oversizedFile) {
-    const bigBuf = Buffer.alloc(6 * 1024 * 1024, 0xff); // 6MB of 0xff
+    const bigBuf = Buffer.alloc(11 * 1024 * 1024, 0xff); // 11MB of 0xff
     const header =
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="big_file"; filename="big.jpg"\r\n` +
@@ -415,10 +422,10 @@ async function run() {
   }
 
   // -------------------------------------------------------------------------
-  section('TEST 3 — Per-file size cap still enforced: 1 file > 5MB → 400');
+  section('TEST 3 — Per-file size cap still enforced: 1 file > 10MB → 400');
   // -------------------------------------------------------------------------
   // Layer: multer boundary — LIMIT_FILE_SIZE fires before the route handler.
-  // Proves MAX_UPLOAD_BYTES = 5MB is untouched by the fix.
+  // Proves MAX_UPLOAD_BYTES = 10MB (raised from 5MB in 50be3cc) is enforced.
   {
     const res = await postMultipart('/api/application/submit-group', {
       numFiles: 0,
@@ -427,13 +434,13 @@ async function run() {
     });
 
     check(
-      'oversized file (6MB) → status 400',
+      'oversized file (11MB) → status 400',
       res.status === 400,
       `HTTP ${res.status}`
     );
     check(
-      'oversized file → "A file exceeds the 5MB size limit." message',
-      (res.body.message || '').includes('A file exceeds the 5MB size limit.'),
+      'oversized file → "A file exceeds the 10MB size limit." message',
+      (res.body.message || '').includes('A file exceeds the 10MB size limit.'),
       JSON.stringify(res.body)
     );
   }

@@ -318,3 +318,15 @@ Set **only** on the FinScore fast-path. A renewal that re-ran FinScore measured 
 **Display, agreed with the operator:** provenance renders inline with the value, with the amber notice kept as reinforcement rather than as the sole signal. A 5-day-old and an 89-day-old score are both legal under the 90-day window and are not the same risk, which is why the date is shown rather than a bare "carried over" flag.
 
 **Migration 018 is a deploy gate** — `/submit` writes both columns on every submission. It also backfills rows written between 017 and 018 so existing renewals render provenance instead of showing a carried-over score with no age.
+
+---
+
+## 021 — Emails for an inactive sales officer go to the active SOs (2026-09-30)
+
+**Trigger:** Dennis De Guia resigned. He was deactivated (`is_active=false`) and his open applications were reassigned to Troy Laderas by hand (SQL, 2026-09-29).
+
+**Decision:** every email addressed to an application's assigned SO goes through `resolveSORecipients` (`services/email.js`). It returns the assigned SO while they are active. If they are inactive or their row is missing, it returns every active sales officer instead. This covers the rework return, the approved and declined decisions, and the SO confirmation request. `assign-sales-officer` now rejects any id that isn't an active `sales_officer` (400).
+
+**Why:** the four send sites looked up the SO by id without checking `is_active`, so any application still pointing at a departed officer would email borrower PII to an inbox the company no longer controls. Reassignment fixes the data once. This makes the next departure safe without SQL.
+
+**Not done:** the application is not reassigned automatically. The fallback sends emails to the active SOs; ownership changes only through `assign-sales-officer`. Confirmation tokens are still not bound to an SO, so every recipient gets the same single-use pair, and the first click wins.

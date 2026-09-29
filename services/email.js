@@ -144,6 +144,47 @@ async function sendEmail({ to, subject, htmlBody }) {
 }
 
 // ---------------------------------------------------------------------------
+// resolveSORecipients
+// ---------------------------------------------------------------------------
+
+/**
+ * Who receives an email meant for an application's assigned sales officer.
+ * Returns the assigned SO while they are active. If they have been
+ * deactivated (e.g. resigned), returns every active sales officer instead so
+ * the lead keeps an owner and borrower details never go to a departed inbox.
+ *
+ * @param {string} assignedSalesOfficerId - applications.assigned_sales_officer
+ * @returns {Promise<Array<{id, email, full_name, roles}>>} empty on lookup failure
+ */
+async function resolveSORecipients(assignedSalesOfficerId) {
+  const { data: assigned, error: assignedError } = await supabase
+    .from('admin_users')
+    .select('id, email, full_name, roles')
+    .eq('id', assignedSalesOfficerId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (assignedError) {
+    console.error('[email] resolveSORecipients — assigned SO lookup failed:', assignedError.message);
+    return [];
+  }
+  if (assigned) return [assigned];
+
+  const { data: team, error: teamError } = await supabase
+    .from('admin_users')
+    .select('id, email, full_name, roles')
+    .contains('roles', ['sales_officer'])
+    .eq('is_active', true);
+
+  if (teamError) {
+    console.error('[email] resolveSORecipients — active SO lookup failed:', teamError.message);
+    return [];
+  }
+  console.warn(`[email] assigned SO ${assignedSalesOfficerId} is inactive or missing — routing to ${(team || []).length} active SO(s)`);
+  return team || [];
+}
+
+// ---------------------------------------------------------------------------
 // notifySalesOfficer
 // ---------------------------------------------------------------------------
 
@@ -471,6 +512,7 @@ async function sendProblemReport({ reported_by_name, reported_by_role, page, des
 // ---------------------------------------------------------------------------
 
 module.exports = {
+  resolveSORecipients,
   sendEmail,
   notifySalesOfficer,
   notifyTeamByRole,
