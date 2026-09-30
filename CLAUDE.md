@@ -43,8 +43,10 @@ routes/
   confirm.js                — /api/confirm/* (SO confirmation via token)
   public.js                 — /api/public/* (sales officers list)
   reports.js                — /api/reports/* (report a problem)
+  reporting.js              — /api/reporting/* (admin analytics: overview, dashboard)
 services/
   supabase.js               — Supabase client init
+  reporting.js              — Pure aggregation for /api/reporting (PH-time buckets, collections estimate); tests/reporting.test.js
   finscore.js               — FinScore OAuth2 token caching, telco detection, scoring
   loandisk.js               — Loandisk borrower creation, S3 presigned URL file uploads
   email.js                  — ZeptoMail transactional emails (submission, stage transitions, SO confirmation)
@@ -87,6 +89,8 @@ middleware/
 | GET | `/api/confirm/:token` | None (token in URL) | SO confirmation link handler |
 | GET | `/api/public/sales-officers` | None | List sales officers |
 | POST | `/api/reports/problem` | None | Report a problem with screenshot |
+| GET | `/api/reporting/overview?period=30d\|90d\|12m` | JWT + role(admin, super_admin) | Reporting page metrics (see docs/CONTRACT.md in the workspace) |
+| GET | `/api/reporting/dashboard` | JWT + role(admin, super_admin) | This week's applicants, staff changes, projected collections |
 
 Test routes: `test-loandisk`, `test-upload`, `test-finscore`, `test-email`, `test-cleanup` under `/api/application/`.
 

@@ -134,6 +134,10 @@ app.use('/api/public', publicRouter)
 const reportsRouter = require('./routes/reports')
 app.use('/api/reports', reportsRouter)
 
+// Admin/super_admin analytics (Dashboard + Reporting pages)
+const reportingRouter = require('./routes/reporting')
+app.use('/api/reporting', reportingRouter)
+
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
